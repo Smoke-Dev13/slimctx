@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitignore
+
+# Python artefacts
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv
+venv
+env
+
+# Test / CI
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local config
+.env
+*.env.local
+
+# Docs / extras that don't belong in the image
+docs/
+*.md
+LICENSE

@@ -1,0 +1,36 @@
+services:
+  contextly:
+    build: .
+    image: contextly:latest
+    ports:
+      - "4000:4000"
+    environment:
+      # Required: your upstream provider API key
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Contextly config (all have sensible defaults)
+      CONTEXTLY_UPSTREAM: ${CONTEXTLY_UPSTREAM:-openai}
+      CONTEXTLY_COMPRESSION_ENABLED: ${CONTEXTLY_COMPRESSION_ENABLED:-true}
+      CONTEXTLY_AB_SAMPLE_RATE: ${CONTEXTLY_AB_SAMPLE_RATE:-0.0}
+      CONTEXTLY_LOG_LEVEL: ${CONTEXTLY_LOG_LEVEL:-info}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:4000/health')"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional: Prometheus to scrape /metrics
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - contextly
