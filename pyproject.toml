@@ -54,6 +54,14 @@ dev = [
     "ruff>=0.5.0",
     "anyio[trio]>=4.0.0",
     "pytest-cov>=5.0.0",
+    # Optional runtime extras required to lint and run the full test suite
+    # (test_mcp_server.py imports `mcp`; test_code.py needs the tree-sitter
+    # grammars; mypy strict needs `mcp` for FastMCP decorator types).
+    "mcp>=1.0.0",
+    "tree-sitter>=0.22.0",
+    "tree-sitter-python>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-go>=0.21.0",
 ]
 
 [project.scripts]
