@@ -450,17 +450,17 @@ python scripts/accuracy_benchmark.py \
 python scripts/accuracy_benchmark.py --self-test
 ```
 
-The harness is verified offline on every push (the **Demo & Accuracy** workflow). To produce **real LLM numbers**, add an `OPENROUTER_API_KEY` repository secret and run that workflow manually (Actions → *Demo & Accuracy Benchmark* → *Run workflow*); results are written to the run summary.
+The harness is verified offline on every push (the **Demo & Accuracy** workflow). To reproduce live numbers, add your provider API key as the `LLM_API_KEY` repository secret (Settings → Secrets → Actions) and run that workflow manually (Actions → *Demo & Accuracy Benchmark* → *Run workflow*); results are written to the run summary. Defaults target Groq's free tier.
 
-Harness self-test output (deterministic *oracle* model — illustrates the mechanism, **not** real-LLM accuracy; run the workflow for live figures):
+**Measured result** — Llama 3.3 70B (Groq), 13 record-lookup questions over a 120-record JSON set:
 
-| Strategy | Accuracy | Mean context tokens |
-|---|---:|---:|
-| full | 100% | 5169 |
-| compressed | 31% | 70 |
-| safe | 100% | 5169 |
+| Strategy | Accuracy | Mean context tokens | Tokens vs full |
+|---|---:|---:|---:|
+| full | **92%** (12/13) | 4096 | — |
+| compressed (lossy) | **0%** (0/13) | 57 | **−99%** |
+| safe | **92%** (12/13) | 4096 | −0% |
 
-The pattern is the whole point: dropping records to shrink context to ~1% collapses lookup accuracy, while `safe` mode keeps every record and matches `full`. On *your* model and data the exact figures will differ — measure them before trusting compression in production.
+This is the *adversarial* case, and it's the honest one: at default aggressiveness the JSON compressor keeps ~1% of records, so the specific record a lookup asks about is almost never present — accuracy collapses to zero while tokens drop 99%. `safe` mode keeps every record and matches full-context accuracy exactly. The takeaway isn't "compression is bad" — it's **use lossy compression for gist/aggregate workloads (ideally with the CCR retrieval fallback), use `--safe-mode` for lookups, and measure on your own data**. Reproduce with `python scripts/accuracy_benchmark.py` against any endpoint.
 
 ---
 

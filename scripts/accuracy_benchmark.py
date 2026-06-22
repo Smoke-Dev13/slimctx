@@ -268,8 +268,9 @@ def _print_report(arms: list[ArmResult], model: str, n_q: int) -> None:
         )
     print(
         "\n> Lossy `compressed` trades accuracy for tokens; `safe` keeps every record "
-        "so accuracy matches `full` at no fidelity cost. Use the trade-off that fits "
-        "your task — aggregates tolerate compression, lookups do not."
+        "so accuracy matches `full` at no fidelity cost. Exact lookups break hard under "
+        "aggressive lossy compression — reserve it for gist/summary workloads (ideally "
+        "with a retrieval fallback) and measure on your own data before trusting it."
     )
 
 

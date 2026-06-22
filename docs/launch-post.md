@@ -1,7 +1,9 @@
 # Launch post drafts
 
-Fill the `<…>` placeholders with the real figures from the **Demo & Accuracy**
-workflow (Actions → *Demo & Accuracy Benchmark* → *Run workflow*) before posting.
+Figures below are from a real run — Llama 3.3 70B (Groq), 13 record-lookup
+questions over a 120-record JSON set. Re-run with your own model/data via the
+**Demo & Accuracy** workflow (Actions → *Demo & Accuracy Benchmark* → *Run
+workflow*) and update the numbers if you change the setup.
 
 ---
 
@@ -29,10 +31,12 @@ lookups. Instead of hiding that, Contextly ships the tools to measure it:
 - built-in shadow A/B in the proxy (ROUGE-1 + a numeric-consistency check), and
 - a `--safe-mode` that never drops a record when you need full fidelity.
 
-On <MODEL> over <N> lookup questions I measured: full context <ACC_FULL>%
-accuracy, lossy compressed <ACC_COMPRESSED>% at <TOKENS_SAVED>% fewer tokens,
-safe mode back to <ACC_SAFE>%. So the pitch isn't "free tokens" — it's "here's
-exactly what the trade costs, decide per workload."
+On Llama 3.3 70B over 13 record-lookup questions I measured: full context 92%
+accuracy, lossy compressed 0% at 99% fewer tokens, safe mode back to 92%. Yes,
+zero — at default aggressiveness the JSON compressor keeps ~1% of records, so a
+lookup's target row is almost never there. That's the honest worst case, and
+exactly why safe mode and the A/B monitor exist. The pitch isn't "free tokens" —
+it's "here's exactly what the trade costs, decide per workload."
 
 Stack: FastAPI + httpx, reversible in-memory store with retrieval-by-key, MCP
 server mode, Prometheus metrics, Docker. MIT. Feedback very welcome —
@@ -51,5 +55,5 @@ as an image or code block, since this audience wants the numbers first.
 
 ## One-line summaries
 
-- X/Twitter: "Contextly: drop-in proxy that cuts LLM input tokens by <TOKENS_SAVED>% — and a benchmark that shows the accuracy you trade for it. Lossy by design, honest by default. MIT."
+- X/Twitter: "Contextly: drop-in proxy that cuts LLM input tokens by 99% — and a benchmark that shows the accuracy you trade for it (spoiler: 92%→0% on blind lookups, 92% with safe mode). Lossy by design, honest by default. MIT."
 - LinkedIn: "Most prompt-compression tools quote token savings and stay quiet about quality. Contextly ships the accuracy benchmark too."
