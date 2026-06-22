@@ -2,10 +2,14 @@ name: Release
 
 # Publishes on a version tag (e.g. v0.1.0):
 #   * pypi   — builds sdist+wheel and publishes via PyPI Trusted Publishing
-#              (OIDC, no token). One-time setup: add this repo+workflow as a
-#              trusted publisher at https://pypi.org/manage/account/publishing/.
+#              (OIDC, no token). Gated on the PYPI_ENABLED repo variable so the
+#              release stays green before PyPI is configured. To enable: add this
+#              repo+workflow as a trusted publisher at
+#              https://pypi.org/manage/account/publishing/, then set repository
+#              variable PYPI_ENABLED=true (Settings → Secrets and variables →
+#              Actions → Variables).
 #   * docker — builds the image and pushes it to GHCR using the built-in
-#              GITHUB_TOKEN (no extra secret needed).
+#              GITHUB_TOKEN (no extra secret needed). Runs on every release.
 
 on:
   push:
@@ -15,6 +19,7 @@ on:
 jobs:
   pypi:
     name: Build & publish to PyPI
+    if: vars.PYPI_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # OIDC for Trusted Publishing
