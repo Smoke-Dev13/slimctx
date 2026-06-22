@@ -51,9 +51,9 @@ def test_preserves_every_record() -> None:
 
 
 def test_preserves_value_types() -> None:
+    # Check the transform directly: it must round-trip every JSON scalar type.
     records = [{"n": 1, "f": 1.5, "b": True, "s": "x", "z": None} for _ in range(3)]
-    table = json.loads(_compress(records).content)
-    assert decode_table(table) == records
+    assert decode_table(encode_table(records)) == records
 
 
 # ── Token / size reduction ──────────────────────────────────────────────────────

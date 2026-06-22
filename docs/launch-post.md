@@ -1,9 +1,9 @@
 # Launch post drafts
 
-Figures below are from a real run — Llama 3.3 70B (Groq), 13 record-lookup
-questions over a 120-record JSON set. Re-run with your own model/data via the
-**Demo & Accuracy** workflow (Actions → *Demo & Accuracy Benchmark* → *Run
-workflow*) and update the numbers if you change the setup.
+Figures below are from a real run — Llama 3.3 70B (Groq), record-lookup
+questions over a 120-record JSON set (small N; the free tier rate-limited it).
+Re-run with your own model/data via the **Demo & Accuracy** workflow (Actions →
+*Demo & Accuracy Benchmark* → *Run workflow*) for a larger sample.
 
 ---
 
@@ -23,13 +23,13 @@ same field names in every row. Contextly rewrites it into a columnar table
 still answers exact lookups, and you spend ~half the tokens. No app changes.
 
 I went down the lossy path first (sample a representative subset of records) and
-benchmarked it honestly: on Llama 3.3 70B over 13 record-lookups, record
-sampling scored **0% accuracy** at 99% fewer tokens — full context was 92%. If
-you drop the record someone asks about, you can't answer. So sampling is now
-opt-in, and the **default is the lossless table**: same answers as full context
-(by construction) at −58% tokens. Lossy summarization stays available for prose
-and gist workloads, with a `--safe-mode` switch and shadow A/B (ROUGE-1 + a
-numeric-consistency check) to measure quality on your own traffic.
+benchmarked it honestly on Llama 3.3 70B: record sampling scored **0% accuracy**
+on lookups at 99% fewer tokens. If you drop the record someone asks about, you
+can't answer. So sampling is now opt-in, and the **default is the lossless
+table**, which measured **100% accuracy — identical to full context — at −63%
+tokens**. Lossy summarization stays available for prose and gist workloads, with
+a `--safe-mode` switch and shadow A/B (ROUGE-1 + a numeric-consistency check) to
+measure quality on your own traffic.
 
 The pitch isn't "free tokens, trust us" — it's "lossless where it counts,
 measured where it isn't."
@@ -51,5 +51,5 @@ as an image or code block, since this audience wants the numbers first.
 
 ## One-line summaries
 
-- X/Twitter: "Contextly: a drop-in LLM proxy that rewrites JSON arrays into a columnar table — losslessly. −58% tokens, every record kept, lookups still work. (Lossy record-sampling? I benchmarked it at 0% on lookups, so it's opt-in.) MIT."
+- X/Twitter: "Contextly: a drop-in LLM proxy that rewrites JSON arrays into a columnar table — losslessly. ~60% fewer tokens, every record kept, lookups still 100% (measured). Lossy record-sampling? I benchmarked it at 0% on lookups, so it's opt-in. MIT."
 - LinkedIn: "Most prompt-compression tools quote token savings and stay quiet about quality. Contextly's default is lossless, and it ships the accuracy benchmark that proves it."

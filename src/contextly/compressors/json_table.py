@@ -8,14 +8,20 @@ names and punctuation repeated in every record:
 This compressor rewrites such an array into a columnar table where the field
 names appear exactly once:
 
-    {"_format":"records-table","fields":["id","name","city"],
+    {"_format":"records-table",
+     "_help":"Columnar JSON. Each list in 'rows' is one record; its items align
+              by position with 'fields'. So row[i] is the value of fields[i].
+              All records are present.",
+     "fields":["id","name","city"],
      "rows":[[1000,"user_000","Reykjavik"],[1001, ...], ...]}
 
-Every record and every value is preserved — the transform is **lossless** and
-round-trips exactly — so an LLM can still answer record-level lookups, unlike
-the sampling compressor in ``json_smart``. It only applies when all elements are
-objects sharing an identical key set (the guarantee that makes it reversible)
-and when the table form is actually smaller.
+The ``_help`` string is a self-describing hint so the model reads the columns
+correctly; it carries no data and is ignored on decode. Every record and every
+value is preserved — the transform is **lossless** and round-trips exactly — so
+an LLM can still answer record-level lookups, unlike the sampling compressor in
+``json_smart``. It only applies when all elements are objects sharing an
+identical key set (the guarantee that makes it reversible) and when the table
+form is actually smaller.
 """
 
 from __future__ import annotations
@@ -31,6 +37,11 @@ logger = structlog.get_logger(__name__)
 
 _MIN_RECORDS: int = 2
 _FORMAT_TAG: str = "records-table"
+_HELP: str = (
+    "Columnar JSON. Each list in 'rows' is one record; its items align by "
+    "position with 'fields', so row[i] is the value of fields[i]. All records "
+    "are present (lossless)."
+)
 
 
 def _make_passthrough(content: str, name: str) -> CompressResult:
@@ -48,6 +59,7 @@ def encode_table(records: list[dict[str, Any]]) -> dict[str, Any]:
     fields = list(records[0].keys())
     return {
         "_format": _FORMAT_TAG,
+        "_help": _HELP,
         "fields": fields,
         "rows": [[r[f] for f in fields] for r in records],
     }

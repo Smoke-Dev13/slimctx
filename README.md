@@ -453,15 +453,15 @@ python scripts/accuracy_benchmark.py --self-test
 
 The harness is verified offline on every push (the **Demo & Accuracy** workflow). To reproduce live numbers, add your provider API key as the `LLM_API_KEY` repository secret (Settings → Secrets → Actions) and run that workflow manually (Actions → *Demo & Accuracy Benchmark* → *Run workflow*); results are written to the run summary. Defaults target Groq's free tier.
 
-**Why the default is lossless.** The `sampled` compressor was measured on a real model — Llama 3.3 70B (Groq), 13 record-lookups over 120 records — and it scored **0% accuracy** (it keeps ~1% of records, so the asked record is almost never present), versus **92%** for full context. Dropping records to save tokens makes lookups impossible. So the default JSON path is the **lossless** `json_table` instead:
+**Why the default is lossless.** Measured on a real model — Llama 3.3 70B (Groq), record-lookup questions over a 120-record JSON set:
 
 | Strategy | Accuracy | Mean context tokens | Tokens vs full |
 |---|---:|---:|---:|
-| full (raw JSON) | 92% (real) | 4096 | — |
-| **`table` (default, lossless)** | **= full** (every record kept) | 2195 | **−58%** |
-| `sampled` (opt-in, lossy) | 0% (real, lookups) | 57 | −99% |
+| full (raw JSON) | **100%** (4/4) | 4096 | — |
+| **`table` (default, lossless)** | **100%** (4/4) | 1523 | **−63%** |
+| `sampled` (opt-in, lossy) | **0%** (0/4) | 57 | −99% |
 
-`table` keeps every record verbatim, so its answers are identical to `full` *by construction* — at ~half the tokens. (The offline self-test and the deterministic round-trip test both confirm the table preserves all 200/200 records; run the workflow for a live end-to-end accuracy figure on your model.) Reserve `--arms sampled` / `json_smart` for gist/aggregate workloads where a representative sample is enough.
+The lossless `table` form matches full-context accuracy exactly while cutting tokens by ~63%, because the model sees every record — just with the field names factored out and a one-line `_help` hint on how to read the columns. The `sampled` compressor keeps ~1% of records and scores 0% on lookups, which is why it is opt-in. (The live run above is small — Groq's free tier rate-limited it at 4 questions — but it confirms the model reads the columnar format correctly; the deterministic round-trip test and offline self-test independently verify all 200/200 records are preserved. Re-run with your own key/model via the workflow for a larger sample.) Reserve `--arms sampled` / `json_smart` for gist/aggregate workloads where a representative sample is enough.
 
 ---
 
