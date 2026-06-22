@@ -108,7 +108,11 @@ known-first-party = ["contextly"]
 # ── Mypy ──────────────────────────────────────────────────────────────────────
 [tool.mypy]
 strict = true
-python_version = "3.11"
+# Match the CI lint runner (Python 3.12). Pinning to 3.11 makes mypy reject the
+# PEP 695 `type` statements found in numpy 2.x stubs (pulled in via datasketch),
+# failing with "Type statement is only supported in Python 3.12 and greater".
+# Runtime support for 3.11 is still verified by the pytest matrix.
+python_version = "3.12"
 mypy_path = ["src"]
 exclude = ["tests/"]
 
