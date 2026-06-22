@@ -6,6 +6,8 @@
 
 Smart context optimization proxy for LLM APIs. Drop it in front of any OpenAI-compatible endpoint to compress large prompts, save tokens, and measure quality impact without changing a line of application code.
 
+**A reversible compression gateway for agents and tools.** JSON is compressed losslessly; logs, tool outputs, and long prose are folded aggressively but stay recoverable — every compression leaves an `expand_ref`, so an agent (over HTTP or MCP) can pull the full original back on demand. See it run with no API key: `python scripts/demo_agent_expand.py`.
+
 ```
 Your app -> Contextly (localhost:4000) -> OpenAI / Anthropic / any LLM
 ```
@@ -367,6 +369,14 @@ contextly mcp
 ---
 
 ## Docker
+
+Pull the published image from GHCR (built and pushed by the release workflow on each version tag):
+
+```bash
+docker run -p 4000:4000 -e OPENAI_API_KEY=sk-... ghcr.io/smoke-dev13/slimctx:latest
+```
+
+Or build it locally:
 
 ```bash
 docker build -t contextly:latest .
