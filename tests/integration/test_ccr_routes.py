@@ -129,6 +129,39 @@ def test_retrieve_roundtrip_preserves_unicode(client: TestClient) -> None:
     assert retrieve_resp.json()["content"] == unicode_prose
 
 
+# ── GET /v1/expand/{ref} (expand-on-demand) ───────────────────────────────────
+
+
+def test_expand_returns_original(client: TestClient) -> None:
+    ref = client.post("/v1/compress", json={"content": _LONG_PROSE, "query": "summarize"}).json()[
+        "ccr_key"
+    ]
+    assert ref is not None
+    resp = client.get(f"/v1/expand/{ref}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is True
+    assert body["ref"] == ref
+    assert body["content"] == _LONG_PROSE
+
+
+def test_expand_404_for_unknown_ref(client: TestClient) -> None:
+    resp = client.get("/v1/expand/0000000000000000")
+    assert resp.status_code == 404
+    assert resp.json()["found"] is False
+
+
+# ── GET /dashboard ────────────────────────────────────────────────────────────
+
+
+def test_dashboard_serves_html(client: TestClient) -> None:
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")
+    assert "Contextly" in resp.text
+    assert "/stats" in resp.text  # the page polls the stats endpoint
+
+
 # ── CCR isolation between TestClient instances ────────────────────────────────
 
 

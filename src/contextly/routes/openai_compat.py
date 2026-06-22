@@ -327,3 +327,36 @@ async def retrieve_endpoint(key: str, ccr_store: CCRDep) -> Response:
         status_code=200,
         media_type="application/json",
     )
+
+
+@router.get("/expand/{ref}")
+async def expand_endpoint(ref: str, ccr_store: CCRDep) -> Response:
+    """Expand a compressed result back to its full original content.
+
+    The expand-on-demand counterpart to lossy compression: when a message was
+    compressed with loss, its ``ccr_key`` (returned in the response body and the
+    ``X-Contextly-CCR-Keys`` header) can be expanded here to recover everything
+    that was dropped — so aggressive compression never permanently loses data.
+
+    Args:
+        ref: The expand reference (a CCR key).
+        ccr_store: CCR reversible store.
+
+    Returns:
+        {"ref": "...", "found": true, "content": "..."} on success.
+        {"ref": "...", "found": false, "error": "..."} with status 404 otherwise.
+    """
+    original = ccr_store.retrieve(ref)
+    if original is None:
+        return Response(
+            content=json.dumps(
+                {"ref": ref, "found": False, "error": f"Reference '{ref}' not found or evicted."}
+            ),
+            status_code=404,
+            media_type="application/json",
+        )
+    return Response(
+        content=json.dumps({"ref": ref, "found": True, "content": original}),
+        status_code=200,
+        media_type="application/json",
+    )

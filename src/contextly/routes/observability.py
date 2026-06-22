@@ -11,13 +11,20 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from contextly.dashboard import DASHBOARD_HTML
 from contextly.deps import ABMonitorDep, ConfigDep
 from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["observability"])
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> HTMLResponse:
+    """Live token-savings dashboard (polls /stats and /quality in the browser)."""
+    return HTMLResponse(DASHBOARD_HTML)
 
 
 @router.get("/health")

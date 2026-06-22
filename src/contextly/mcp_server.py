@@ -98,6 +98,9 @@ async def _compress(
         ccr_key=ccr_key,
     )
 
+    lossless = bool(result.metadata.get("lossless"))
+    expandable = result.compressed_length < result.original_length and not lossless
+
     return {
         "compressed": result.content,
         "ccr_key": ccr_key,
@@ -106,6 +109,16 @@ async def _compress(
         "compression_ratio": round(result.compression_ratio, 4),
         "compressor": result.compressor_name,
         "metadata": result.metadata,
+        # Expand-on-demand: when compression dropped information, the agent can
+        # pull the full original back by calling expand(expand_ref).
+        "expandable": expandable,
+        "expand_ref": ccr_key if expandable else None,
+        "hint": (
+            f"Content was compressed with loss. Call expand('{ccr_key}') to "
+            "retrieve the full original if you need a detail that was dropped."
+            if expandable
+            else None
+        ),
     }
 
 
@@ -164,6 +177,20 @@ async def compress_text(content: str, query: str = "") -> dict[str, Any]:
 async def retrieve_original(key: str) -> str:
     """Return the original content stored under *key*, or an error JSON string."""
     return await _retrieve(key, _default_store)
+
+
+@mcp.tool(
+    name="expand",
+    description=(
+        "Expand a compressed result back to its full original content. Pass the "
+        "expand_ref (or ccr_key) returned by compress_text. Use this whenever a "
+        "compressed response was marked expandable and you need a record, line, "
+        "or detail that compression may have dropped."
+    ),
+)
+async def expand(ref: str) -> str:
+    """Return the full original content for an expand_ref / ccr_key."""
+    return await _retrieve(ref, _default_store)
 
 
 @mcp.tool(

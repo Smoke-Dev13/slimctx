@@ -201,7 +201,23 @@ Retrieve the original content stored under a CCR key.
 {"error": "Key 'a3f1c9e2b8d74501' not found. It may have been evicted."}
 ```
 
+#### `GET /v1/expand/{ref}`
+
+Expand a compressed result back to its full original — the recovery path for lossy compression. `ref` is the `ccr_key` / `expand_ref` from the compression response or the `X-Contextly-CCR-Keys` header.
+
+```json
+// 200
+{"ref": "a3f1c9e2b8d74501", "found": true, "content": "Your long document..."}
+
+// 404
+{"ref": "a3f1c9e2b8d74501", "found": false, "error": "Reference '...' not found or evicted."}
+```
+
 ### Observability endpoints
+
+#### `GET /dashboard`
+
+A self-contained live dashboard (no CDN, no build step). Open it in a browser while the proxy runs — it polls `/stats` and `/quality` and shows tokens saved, estimated cost saved, average compression, and per-compressor quality, refreshing every 2 seconds.
 
 #### `GET /health`
 
@@ -258,9 +274,11 @@ The content router selects a compressor per message in registration-priority ord
 | `passthrough` | Everything else | Returns content unchanged | No |
 | `json_smart` | *(opt-in, not in default chain)* | MinHash clustering + stratified record **sampling**; keeps outliers, drops the rest | Yes |
 
-### CCR Store (Contextly Compression & Retrieval)
+### CCR Store + expand-on-demand
 
 When a compressor reduces content, the original is stored in an in-memory LRU cache keyed by a 16-character hex SHA-256 prefix. The key is returned in the response so callers can retrieve the original via `GET /v1/retrieve/{key}` or the MCP `retrieve_original` tool.
+
+**Expand-on-demand** turns this into a safety net for *lossy* compression. Whenever compression drops information, the result is marked `expandable` with an `expand_ref`, and the full original can be pulled back via `GET /v1/expand/{ref}` or the MCP `expand` tool. This is what lets an agent compress aggressively up front yet recover any specific record, line, or figure it later needs — so token savings never become permanent data loss.
 
 The store holds up to 10 000 entries; oldest entries are evicted on overflow (LRU order).
 
@@ -330,7 +348,8 @@ contextly mcp
 
 | Tool | Description |
 |---|---|
-| `compress_text` | Compress text and store original in CCR store |
+| `compress_text` | Compress text; returns an `expand_ref` and `expandable` flag when compression was lossy |
+| `expand` | Expand a compressed result back to the full original by its `expand_ref` |
 | `retrieve_original` | Retrieve original content by CCR key |
 | `compression_stats` | Return CCR store hit/miss statistics |
 

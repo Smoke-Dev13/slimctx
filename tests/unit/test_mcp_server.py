@@ -35,6 +35,15 @@ def router() -> ContentRouter:
     return r
 
 
+_LOSSY_PROSE = (
+    "Machine learning models require careful hyperparameter tuning to perform well. "
+    "The learning rate is one of the most important parameters to configure properly. "
+    "Batch size affects both training speed and the quality of gradient estimates. "
+    "Regularization techniques such as dropout help prevent overfitting to training data. "
+    "Early stopping is a simple but effective technique to improve generalization. "
+) * 4
+
+
 # ── _compress ─────────────────────────────────────────────────────────────────
 
 
@@ -49,8 +58,34 @@ async def test_compress_returns_required_keys(fresh_store: CCRStore, router: Con
         "compression_ratio",
         "compressor",
         "metadata",
+        "expandable",
+        "expand_ref",
+        "hint",
     }
     assert required.issubset(result.keys())
+
+
+@pytest.mark.asyncio
+async def test_compress_advertises_expand_when_lossy(
+    fresh_store: CCRStore, router: ContentRouter
+) -> None:
+    result = await _compress(_LOSSY_PROSE, "summarize", fresh_store, router)
+    assert result["compression_ratio"] < 1.0
+    assert result["expandable"] is True
+    assert result["expand_ref"] == result["ccr_key"]
+    assert result["hint"] is not None
+    # The advertised ref must actually expand back to the original.
+    assert await _retrieve(result["expand_ref"], fresh_store) == _LOSSY_PROSE
+
+
+@pytest.mark.asyncio
+async def test_compress_not_expandable_when_passthrough(
+    fresh_store: CCRStore, router: ContentRouter
+) -> None:
+    result = await _compress("short", "", fresh_store, router)
+    assert result["expandable"] is False
+    assert result["expand_ref"] is None
+    assert result["hint"] is None
 
 
 @pytest.mark.asyncio
@@ -184,6 +219,11 @@ def test_mcp_has_stats_tool() -> None:
     assert "compression_stats" in tool_names
 
 
-def test_mcp_has_three_tools() -> None:
+def test_mcp_has_expand_tool() -> None:
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "expand" in tool_names
+
+
+def test_mcp_has_expected_tools() -> None:
     tools = mcp._tool_manager.list_tools()
-    assert len(tools) == 3
+    assert len(tools) == 4
