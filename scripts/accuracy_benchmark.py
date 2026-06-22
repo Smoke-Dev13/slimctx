@@ -42,6 +42,7 @@ from dataclasses import dataclass
 import httpx
 
 from contextly.compressors.json_smart import JsonSmartCompressor
+from contextly.compressors.json_table import JsonTableCompressor
 from contextly.tokenizer.registry import get_tokenizer
 
 # ── Synthetic dataset (deterministic) ───────────────────────────────────────────
@@ -202,10 +203,13 @@ class ArmResult:
 
 def _context_for_arm(arm: str, records: list[dict[str, object]], query: str) -> str:
     raw = json.dumps(records)
-    if arm == "full" or arm == "safe":
-        # Safe mode keeps every record; for JSON that is the original payload.
+    if arm == "full":
         return raw
-    if arm == "compressed":
+    if arm == "table":
+        # Default lossless compression: every record kept, fewer tokens.
+        return JsonTableCompressor().compress(raw, query).content
+    if arm == "sampled":
+        # Opt-in lossy record sampling — kept for comparison.
         return JsonSmartCompressor().compress(raw, query).content
     raise ValueError(arm)
 
@@ -267,10 +271,10 @@ def _print_report(arms: list[ArmResult], model: str, n_q: int) -> None:
             f"| {a.name} | {a.accuracy:.0f}% ({a.correct}/{a.total}) | {a.mean_tokens} | {delta} |"
         )
     print(
-        "\n> Lossy `compressed` trades accuracy for tokens; `safe` keeps every record "
-        "so accuracy matches `full` at no fidelity cost. Exact lookups break hard under "
-        "aggressive lossy compression — reserve it for gist/summary workloads (ideally "
-        "with a retrieval fallback) and measure on your own data before trusting it."
+        "\n> `table` is the lossless default (columnar JSON, every record kept) — it "
+        "should match `full` accuracy at far fewer tokens. `sampled` is the opt-in lossy "
+        "record sampler; it saves the most tokens but breaks record-level lookups, so "
+        "reserve it for gist/aggregate workloads."
     )
 
 
@@ -286,7 +290,7 @@ def main() -> int:
     p.add_argument(
         "--sleep", type=float, default=1.5, help="Pause between calls (free-tier friendly)"
     )
-    p.add_argument("--arms", default="full,compressed,safe")
+    p.add_argument("--arms", default="full,table,sampled")
     p.add_argument(
         "--self-test", action="store_true", help="Run offline with a deterministic oracle model"
     )
@@ -300,9 +304,10 @@ def main() -> int:
         client: object = OracleClient()
         results = _run(arms, questions, records, client, args.model, self_test=True)
         _print_report(results, "oracle(self-test)", len(questions))
-        # Sanity: compressed must not beat full on lookups in the oracle model.
         by = {r.name: r for r in results}
-        assert by["full"].accuracy >= by["compressed"].accuracy, "harness invariant broken"
+        # Lossless table must preserve every answer; lossy sampling cannot beat full.
+        assert by["table"].accuracy == by["full"].accuracy, "lossless table changed an answer"
+        assert by["full"].accuracy >= by["sampled"].accuracy, "harness invariant broken"
         print("\nself-test OK")
         return 0
 

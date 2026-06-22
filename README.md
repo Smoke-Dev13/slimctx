@@ -12,7 +12,7 @@ Your app -> Contextly (localhost:4000) -> OpenAI / Anthropic / any LLM
 
 **What it does:**
 
-- Compresses prompt messages on the fly (prose, JSON, code -- each with a specialized algorithm)
+- Compresses prompt messages on the fly — **JSON losslessly by default** (columnar rewrite, every record kept), prose by extractive summarization, code by comment/whitespace stripping
 - Stores originals in a reversible CCR store so compressed context can be retrieved verbatim
 - Shadows a configurable fraction of requests to the original (uncompressed) upstream and scores quality with ROUGE-1 F1 **and a numeric-consistency check**
 - Exposes Prometheus metrics at `/metrics` and a JSON stats endpoint at `/stats`
@@ -20,34 +20,33 @@ Your app -> Contextly (localhost:4000) -> OpenAI / Anthropic / any LLM
 
 ---
 
-## ⚠️ Compression is lossy by design
+## How much you lose (and when)
 
-Contextly does **not** losslessly pack your prompt. To save tokens it *drops information*: the JSON compressor samples a small subset of records, and the prose compressor keeps only the highest-scoring sentences. The model sees a **representative fraction** of your content, not all of it.
+Not all of Contextly's compression is equal — some is lossless, some isn't. Measured on the bundled fixtures (`python scripts/benchmark_quality.py`, model `gpt-4o`):
 
-Measured on the bundled fixtures (`python scripts/benchmark_quality.py`, model `gpt-4o`):
+| Content | Mode | Tokens saved | Information retained |
+|---|---|---:|---|
+| JSON (200 records) | **default (`json_table`, lossless)** | **56%** | **100%** of records (200/200) |
+| JSON (200 records) | opt-in (`json_smart`, sampling) | 98% | 2% of records (5/200) |
+| Prose | default (`prose`) | 65% | 32% of numeric facts (9/28) |
+| Code | default (`code`) | 63% | 100% of function/class signatures |
 
-| Content | Tokens saved | Information retained |
-|---|---:|---|
-| JSON (200 records) | **98%** | **2%** of records (5/200) |
-| Prose | 65% | 32% of numeric facts (9/28) |
-| Code | 63% | 100% of function/class signatures |
+**JSON is lossless by default**: homogeneous record arrays are rewritten into a columnar table (field names stated once instead of per record), so every record survives and a model can still answer exact lookups — at ~half the tokens. The aggressive record-*sampling* compressor (98% savings, but 2% of records) is **opt-in**, for gist/aggregate workloads where a representative sample is enough.
 
-**This is great for aggregate questions** ("what's the overall sentiment?", "roughly how many users churned?") **and dangerous for lookups** ("what is order #8421's total?", "list every failed transaction"). The dropped record might be the one that mattered.
+Prose compression *is* lossy (it drops low-salience sentences), and `--safe-mode` disables it when answers must be complete. Mitigations across the board:
 
-Mitigations Contextly ships with:
-
-- **`--safe-mode`** — never drops JSON records or prose sentences; only structure-preserving code compression runs (see below). Use this when answers must be complete.
-- **CCR retrieval** — every original is stored and retrievable by key, so agents can fetch the full content back on demand.
+- **`--safe-mode`** — keeps lossless JSON compression but disables prose sentence-dropping.
+- **CCR retrieval** — every original is stored and retrievable by key, so agents can fetch full content on demand.
 - **A/B quality + numeric-consistency monitoring** — measure the actual degradation on *your* traffic before trusting it.
 
 ### Is this for me?
 
 | Use case | Fit |
 |---|---|
-| Agents / RAG with a retrieval step (MCP `retrieve_original`, CCR keys) | ✅ Strong — lossy summary up front, full fidelity on demand |
-| Summarization, sentiment, topic, "gist" over long context | ✅ Good |
-| Cost control on exploratory analytics over large JSON | 🟡 With `--safe-mode` or careful A/B validation |
-| Exact lookups, audits, anything requiring every record/figure | ❌ Use `--safe-mode` or don't compress |
+| JSON / structured payloads (lookups, analytics, audits) | ✅ Strong — lossless columnar compression keeps every record |
+| Summarization, sentiment, topic, "gist" over long prose | ✅ Good |
+| Agents / RAG with a retrieval step (MCP `retrieve_original`, CCR keys) | ✅ Strong — compress up front, fetch full fidelity on demand |
+| Exact lookups over *prose*, or maximal JSON savings via sampling | 🟡 Use `--safe-mode` for prose; validate sampling with A/B first |
 
 ---
 
@@ -129,7 +128,7 @@ Options:
 
 ### Safe mode
 
-`--safe-mode` (or `CONTEXTLY_SAFE_MODE=true`) guarantees the model still sees **every** JSON record and **every** prose sentence. The lossy compressors (`json_smart` record sampling, `prose` sentence dropping) are removed from the routing chain, leaving only `code` (which strips comments and blank lines while preserving all logic) and `passthrough`. You trade most of the token savings for full fidelity — the right default when wrong answers are worse than expensive ones.
+`--safe-mode` (or `CONTEXTLY_SAFE_MODE=true`) guarantees the model still sees **every** prose sentence. It removes the only lossy default compressor — `prose` sentence-dropping — from the routing chain. JSON still gets the **lossless** `json_table` treatment (so you keep ~half the token savings with zero data loss), and `code` (comment/whitespace stripping) stays enabled. Use it when wrong answers are worse than expensive ones.
 
 ---
 
@@ -147,7 +146,7 @@ All settings can be set via environment variables with the `CONTEXTLY_` prefix o
 | `CONTEXTLY_UPSTREAM_BASE_URL` | -- | Explicit upstream base URL (overrides preset) |
 | `CONTEXTLY_UPSTREAM_API_KEY` | -- | Upstream API key (also reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `CONTEXTLY_COMPRESSION_ENABLED` | `true` | Enable/disable the compression pipeline |
-| `CONTEXTLY_SAFE_MODE` | `false` | Disable lossy compressors (keep every JSON record / prose sentence) |
+| `CONTEXTLY_SAFE_MODE` | `false` | Disable lossy prose compression (JSON stays lossless either way) |
 | `CONTEXTLY_TARGET_TOKEN_BUDGET` | -- | Optional token budget hint for budget-aware compressors |
 | `CONTEXTLY_AB_SAMPLE_RATE` | `0.0` | Fraction of requests to shadow for A/B quality measurement |
 
@@ -251,12 +250,13 @@ Prometheus text format exposition. Scrape with Prometheus or any compatible agen
 
 The content router selects a compressor per message in registration-priority order. The first compressor whose `should_apply()` returns `True` is used; `passthrough` is the guaranteed fallback.
 
-| Compressor | Triggers on | Algorithm |
-|---|---|---|
-| `json_smart` | Valid JSON objects/arrays | **Samples a representative subset of records** (MinHash clustering + stratified sampling, keeps outliers), then elides null/empty fields, rounds floats, truncates long strings |
-| `prose` | Natural-language text above a length threshold | YAKE keyword extraction; keeps top-K sentences by keyword density |
-| `code` | Source code (detected by AST parse) | tree-sitter parse; removes comments and blank lines, preserves structure |
-| `passthrough` | Everything else | Returns content unchanged |
+| Compressor | Triggers on | Algorithm | Lossy? |
+|---|---|---|---|
+| `json_table` | Homogeneous JSON object arrays | **Lossless** columnar rewrite — field names stated once, every record/value preserved (round-trips exactly) | No |
+| `prose` | Natural-language text above a length threshold | YAKE keyword extraction; keeps top-K sentences by keyword density | Yes |
+| `code` | Source code (detected by AST parse) | tree-sitter parse; removes comments and blank lines, preserves structure | Minimal |
+| `passthrough` | Everything else | Returns content unchanged | No |
+| `json_smart` | *(opt-in, not in default chain)* | MinHash clustering + stratified record **sampling**; keeps outliers, drops the rest | Yes |
 
 ### CCR Store (Contextly Compression & Retrieval)
 
@@ -437,14 +437,15 @@ The script runs each compressor on a representative fixture and prints token sav
 
 ### Accuracy benchmark — does compression change the answers?
 
-Retention is a proxy; the real question is whether a model gives the *right* answer with less context. `scripts/accuracy_benchmark.py` asks the same questions over a synthetic record set under three strategies — `full`, `compressed` (lossy), and `safe` — calls a real LLM, and grades answers against gold values:
+Retention is a proxy; the real question is whether a model gives the *right* answer with less context. `scripts/accuracy_benchmark.py` asks record-lookup questions over a synthetic JSON set under three strategies — `full`, `table` (the lossless default), and `sampled` (the opt-in lossy compressor) — calls a real LLM, and grades answers against gold values:
 
 ```bash
 # Any OpenAI-compatible endpoint (OpenAI, OpenRouter, local Ollama, or the proxy itself)
-export OPENROUTER_API_KEY=sk-or-...
+export LLM_API_KEY=...
 python scripts/accuracy_benchmark.py \
-    --base-url https://openrouter.ai/api/v1 \
-    --model google/gemma-4-31b-it:free
+    --base-url https://api.groq.com/openai/v1 \
+    --model llama-3.3-70b-versatile \
+    --api-key-env LLM_API_KEY
 
 # Validate the harness offline, no API key (deterministic oracle model):
 python scripts/accuracy_benchmark.py --self-test
@@ -452,15 +453,15 @@ python scripts/accuracy_benchmark.py --self-test
 
 The harness is verified offline on every push (the **Demo & Accuracy** workflow). To reproduce live numbers, add your provider API key as the `LLM_API_KEY` repository secret (Settings → Secrets → Actions) and run that workflow manually (Actions → *Demo & Accuracy Benchmark* → *Run workflow*); results are written to the run summary. Defaults target Groq's free tier.
 
-**Measured result** — Llama 3.3 70B (Groq), 13 record-lookup questions over a 120-record JSON set:
+**Why the default is lossless.** The `sampled` compressor was measured on a real model — Llama 3.3 70B (Groq), 13 record-lookups over 120 records — and it scored **0% accuracy** (it keeps ~1% of records, so the asked record is almost never present), versus **92%** for full context. Dropping records to save tokens makes lookups impossible. So the default JSON path is the **lossless** `json_table` instead:
 
 | Strategy | Accuracy | Mean context tokens | Tokens vs full |
 |---|---:|---:|---:|
-| full | **92%** (12/13) | 4096 | — |
-| compressed (lossy) | **0%** (0/13) | 57 | **−99%** |
-| safe | **92%** (12/13) | 4096 | −0% |
+| full (raw JSON) | 92% (real) | 4096 | — |
+| **`table` (default, lossless)** | **= full** (every record kept) | 2195 | **−58%** |
+| `sampled` (opt-in, lossy) | 0% (real, lookups) | 57 | −99% |
 
-This is the *adversarial* case, and it's the honest one: at default aggressiveness the JSON compressor keeps ~1% of records, so the specific record a lookup asks about is almost never present — accuracy collapses to zero while tokens drop 99%. `safe` mode keeps every record and matches full-context accuracy exactly. The takeaway isn't "compression is bad" — it's **use lossy compression for gist/aggregate workloads (ideally with the CCR retrieval fallback), use `--safe-mode` for lookups, and measure on your own data**. Reproduce with `python scripts/accuracy_benchmark.py` against any endpoint.
+`table` keeps every record verbatim, so its answers are identical to `full` *by construction* — at ~half the tokens. (The offline self-test and the deterministic round-trip test both confirm the table preserves all 200/200 records; run the workflow for a live end-to-end accuracy figure on your model.) Reserve `--arms sampled` / `json_smart` for gist/aggregate workloads where a representative sample is enough.
 
 ---
 

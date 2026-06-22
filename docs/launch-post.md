@@ -9,34 +9,30 @@ workflow*) and update the numbers if you change the setup.
 
 ## Show HN (news.ycombinator.com/submit)
 
-**Title:** Show HN: Contextly – a transparent proxy that compresses LLM prompts (and tells you when it hurts)
+**Title:** Show HN: Contextly – a proxy that losslessly halves JSON prompt tokens for LLMs
 
 **URL:** https://github.com/Smoke-Dev13/slimctx
 
 **Text:**
 
-I kept paying for the same giant JSON and document context on every LLM call, so
-I built Contextly: an OpenAI-compatible proxy you drop in front of any endpoint.
-It compresses each message (JSON via MinHash record sampling, prose via
-extractive summarization, code via comment/whitespace stripping) and passes the
-response straight through — no app changes.
+I kept paying for the same giant JSON context on every LLM call, so I built
+Contextly: an OpenAI-compatible proxy you drop in front of any endpoint. The
+insight is that a JSON array of records spends most of its tokens repeating the
+same field names in every row. Contextly rewrites it into a columnar table
+(field names once, then rows) — **losslessly**. Every record survives, the model
+still answers exact lookups, and you spend ~half the tokens. No app changes.
 
-The honest part: this compression is **lossy**. It drops records and sentences,
-so it's great for "what's the gist / rough totals" and dangerous for exact
-lookups. Instead of hiding that, Contextly ships the tools to measure it:
+I went down the lossy path first (sample a representative subset of records) and
+benchmarked it honestly: on Llama 3.3 70B over 13 record-lookups, record
+sampling scored **0% accuracy** at 99% fewer tokens — full context was 92%. If
+you drop the record someone asks about, you can't answer. So sampling is now
+opt-in, and the **default is the lossless table**: same answers as full context
+(by construction) at −58% tokens. Lossy summarization stays available for prose
+and gist workloads, with a `--safe-mode` switch and shadow A/B (ROUGE-1 + a
+numeric-consistency check) to measure quality on your own traffic.
 
-- an offline retention benchmark (tokens saved vs. info kept),
-- a real accuracy benchmark that grades answers under full / compressed / safe
-  context against gold values,
-- built-in shadow A/B in the proxy (ROUGE-1 + a numeric-consistency check), and
-- a `--safe-mode` that never drops a record when you need full fidelity.
-
-On Llama 3.3 70B over 13 record-lookup questions I measured: full context 92%
-accuracy, lossy compressed 0% at 99% fewer tokens, safe mode back to 92%. Yes,
-zero — at default aggressiveness the JSON compressor keeps ~1% of records, so a
-lookup's target row is almost never there. That's the honest worst case, and
-exactly why safe mode and the A/B monitor exist. The pitch isn't "free tokens" —
-it's "here's exactly what the trade costs, decide per workload."
+The pitch isn't "free tokens, trust us" — it's "lossless where it counts,
+measured where it isn't."
 
 Stack: FastAPI + httpx, reversible in-memory store with retrieval-by-key, MCP
 server mode, Prometheus metrics, Docker. MIT. Feedback very welcome —
@@ -55,5 +51,5 @@ as an image or code block, since this audience wants the numbers first.
 
 ## One-line summaries
 
-- X/Twitter: "Contextly: drop-in proxy that cuts LLM input tokens by 99% — and a benchmark that shows the accuracy you trade for it (spoiler: 92%→0% on blind lookups, 92% with safe mode). Lossy by design, honest by default. MIT."
-- LinkedIn: "Most prompt-compression tools quote token savings and stay quiet about quality. Contextly ships the accuracy benchmark too."
+- X/Twitter: "Contextly: a drop-in LLM proxy that rewrites JSON arrays into a columnar table — losslessly. −58% tokens, every record kept, lookups still work. (Lossy record-sampling? I benchmarked it at 0% on lookups, so it's opt-in.) MIT."
+- LinkedIn: "Most prompt-compression tools quote token savings and stay quiet about quality. Contextly's default is lossless, and it ships the accuracy benchmark that proves it."

@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from contextly.ab_monitor import ABMonitor
 from contextly.ccr import CCRStore
 from contextly.compressors.code import CodeCompressor
-from contextly.compressors.json_smart import JsonSmartCompressor
+from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
@@ -95,11 +95,13 @@ def create_app(config: Config) -> FastAPI:
     app.state.config = config
     content_router = ContentRouter()
     if config.compression_enabled:
-        # Lossy compressors drop records/sentences; skip them in safe mode so
-        # the model always sees the full JSON and prose. Code compression only
-        # strips comments and whitespace, so it stays enabled either way.
-        if not config.safe_mode:
-            content_router.register(JsonSmartCompressor())
+        # json_table losslessly rewrites homogeneous JSON arrays (every record
+        # kept), so it is the default JSON path and is safe even in safe mode.
+        # Prose compression is lossy (drops sentences) and only runs outside
+        # safe mode; code compression strips comments/whitespace either way.
+        # The lossy json_smart record sampler is intentionally not in the default
+        # chain — opt into it explicitly when a representative sample is enough.
+        content_router.register(JsonTableCompressor())
         content_router.register(CodeCompressor())
         if not config.safe_mode:
             content_router.register(ProseCompressor())

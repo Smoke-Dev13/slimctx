@@ -139,7 +139,7 @@ def test_bench_output_row_count_matches_messages(runner: CliRunner, prose_payloa
 
 def test_bench_json_content_uses_json_compressor(runner: CliRunner, json_payload: str) -> None:
     result = runner.invoke(main, ["bench", json_payload])
-    assert "json_smart" in result.output
+    assert "json_table" in result.output
 
 
 def test_bench_prose_content_uses_prose_or_passthrough(

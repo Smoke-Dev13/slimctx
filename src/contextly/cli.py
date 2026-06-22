@@ -125,7 +125,7 @@ def bench(payload_file: str, model: str) -> None:
     import time as _time
 
     from contextly.compressors.code import CodeCompressor
-    from contextly.compressors.json_smart import JsonSmartCompressor
+    from contextly.compressors.json_table import JsonTableCompressor
     from contextly.compressors.prose import ProseCompressor
     from contextly.compressors.registry import ContentRouter
 
@@ -150,7 +150,7 @@ def bench(payload_file: str, model: str) -> None:
         sys.exit(1)
 
     router = ContentRouter()
-    router.register(JsonSmartCompressor())
+    router.register(JsonTableCompressor())
     router.register(CodeCompressor())
     router.register(ProseCompressor())
 

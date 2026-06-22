@@ -29,6 +29,7 @@ from contextly.ab_monitor import _extract_numbers
 from contextly.compressors.base import Compressor, CompressResult
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_smart import JsonSmartCompressor
+from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.tokenizer.registry import get_tokenizer
 
@@ -95,6 +96,15 @@ class Row:
 # ── Retention metrics ───────────────────────────────────────────────────────────
 
 
+def _record_count(parsed: object) -> int:
+    """Count records in a list payload or a {"rows": [...]} table payload."""
+    if isinstance(parsed, list):
+        return len(parsed)
+    if isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
+        return len(parsed["rows"])
+    return 1
+
+
 def _json_retention(original: str, result: CompressResult) -> tuple[str, float]:
     """Fraction of records retained in the compressed JSON."""
     try:
@@ -102,8 +112,8 @@ def _json_retention(original: str, result: CompressResult) -> tuple[str, float]:
         after = json.loads(result.content)
     except json.JSONDecodeError:
         return "records retained", 100.0
-    n_before = len(before) if isinstance(before, list) else 1
-    n_after = len(after) if isinstance(after, list) else 1
+    n_before = _record_count(before)
+    n_after = _record_count(after)
     pct = 100.0 * n_after / n_before if n_before else 100.0
     return f"records retained ({n_after}/{n_before})", pct
 
@@ -136,7 +146,8 @@ def _code_retention(original: str, result: CompressResult) -> tuple[str, float]:
 def _benchmark(model: str, query: str) -> list[Row]:
     tok = get_tokenizer(model)
     cases: list[tuple[str, str, Compressor, object]] = [
-        ("JSON", _JSON_SAMPLE, JsonSmartCompressor(), _json_retention),
+        ("JSON (default, lossless)", _JSON_SAMPLE, JsonTableCompressor(), _json_retention),
+        ("JSON (opt-in sampling)", _JSON_SAMPLE, JsonSmartCompressor(), _json_retention),
         ("prose", _PROSE_SAMPLE, ProseCompressor(), _prose_retention),
         ("code", _CODE_SAMPLE, CodeCompressor(), _code_retention),
     ]
