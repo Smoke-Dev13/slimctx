@@ -37,6 +37,7 @@ import structlog
 from contextly.ccr import CCRStore
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
+from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 
@@ -58,6 +59,7 @@ def _build_default_router() -> ContentRouter:
     router = ContentRouter()
     router.register(JsonTableCompressor())
     router.register(CodeCompressor())
+    router.register(LogCompressor())
     router.register(ProseCompressor())
     return router
 

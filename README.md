@@ -271,6 +271,7 @@ The content router selects a compressor per message in registration-priority ord
 | `json_table` | Homogeneous JSON object arrays | **Lossless** columnar rewrite — field names stated once, every record/value preserved (round-trips exactly) | No |
 | `prose` | Natural-language text above a length threshold | YAKE keyword extraction; keeps top-K sentences by keyword density | Yes |
 | `code` | Source code (detected by AST parse) | tree-sitter parse; removes comments and blank lines, preserves structure | Minimal |
+| `logs` | Multi-line logs / tool output | Folds repeated lines by template (timestamps/ids/numbers masked); each unique pattern kept once with an `(xN)` count | Yes (expand-recoverable) |
 | `passthrough` | Everything else | Returns content unchanged | No |
 | `json_smart` | *(opt-in, not in default chain)* | MinHash clustering + stratified record **sampling**; keeps outliers, drops the rest | Yes |
 

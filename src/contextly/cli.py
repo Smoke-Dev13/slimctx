@@ -126,6 +126,7 @@ def bench(payload_file: str, model: str) -> None:
 
     from contextly.compressors.code import CodeCompressor
     from contextly.compressors.json_table import JsonTableCompressor
+    from contextly.compressors.logs import LogCompressor
     from contextly.compressors.prose import ProseCompressor
     from contextly.compressors.registry import ContentRouter
 
@@ -152,6 +153,7 @@ def bench(payload_file: str, model: str) -> None:
     router = ContentRouter()
     router.register(JsonTableCompressor())
     router.register(CodeCompressor())
+    router.register(LogCompressor())
     router.register(ProseCompressor())
 
     row_fmt = " {:>3}  {:<10}  {:>9,}  {:>10,}  {:>8,}  {:<14}  {:>7.1f}"

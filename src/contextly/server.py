@@ -27,6 +27,7 @@ from contextly.ab_monitor import ABMonitor
 from contextly.ccr import CCRStore
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
+from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
@@ -104,6 +105,9 @@ def create_app(config: Config) -> FastAPI:
         content_router.register(JsonTableCompressor())
         content_router.register(CodeCompressor())
         if not config.safe_mode:
+            # Log folding drops the exact values of duplicate lines (recoverable
+            # via expand), so it is lossy and excluded from safe mode.
+            content_router.register(LogCompressor())
             content_router.register(ProseCompressor())
     app.state.content_router = content_router
     app.state.ccr_store = CCRStore()
