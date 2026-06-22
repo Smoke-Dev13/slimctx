@@ -32,6 +32,7 @@ from contextly.deps import (
     HttpClientDep,
     SafeContentRouterDep,
 )
+from contextly.expand import filter_original
 from contextly.metrics import observe_request
 
 # Keeps strong references to background tasks so they aren't GC'd before completion.
@@ -446,21 +447,27 @@ async def retrieve_endpoint(key: str, ccr_store: CCRDep) -> Response:
 
 
 @router.get("/expand/{ref}")
-async def expand_endpoint(ref: str, ccr_store: CCRDep) -> Response:
-    """Expand a compressed result back to its full original content.
+async def expand_endpoint(ref: str, ccr_store: CCRDep, contains: str = "") -> Response:
+    """Expand a compressed result back to its original — optionally just a slice.
 
     The expand-on-demand counterpart to lossy compression: when a message was
     compressed with loss, its ``ccr_key`` (returned in the response body and the
-    ``X-Contextly-CCR-Keys`` header) can be expanded here to recover everything
-    that was dropped — so aggressive compression never permanently loses data.
+    ``X-Contextly-CCR-Keys`` header) can be expanded here to recover what was
+    dropped — so aggressive compression never permanently loses data.
+
+    Pass ``?contains=<substr>`` to pull back only the matching records (for JSON)
+    or lines (for logs/text) instead of the whole original — granular recovery so
+    the agent spends tokens only on the detail it needs.
 
     Args:
         ref: The expand reference (a CCR key).
         ccr_store: CCR reversible store.
+        contains: Optional case-insensitive substring filter.
 
     Returns:
-        {"ref": "...", "found": true, "content": "..."} on success.
-        {"ref": "...", "found": false, "error": "..."} with status 404 otherwise.
+        {"ref", "found": true, "content", "matches": N} on success
+        (``matches`` is -1 when no filter was applied).
+        {"ref", "found": false, "error"} with status 404 otherwise.
     """
     original = ccr_store.retrieve(ref)
     if original is None:
@@ -471,8 +478,9 @@ async def expand_endpoint(ref: str, ccr_store: CCRDep) -> Response:
             status_code=404,
             media_type="application/json",
         )
+    content, matches = filter_original(original, contains)
     return Response(
-        content=json.dumps({"ref": ref, "found": True, "content": original}),
+        content=json.dumps({"ref": ref, "found": True, "content": content, "matches": matches}),
         status_code=200,
         media_type="application/json",
     )

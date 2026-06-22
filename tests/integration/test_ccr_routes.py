@@ -151,6 +151,17 @@ def test_expand_404_for_unknown_ref(client: TestClient) -> None:
     assert resp.json()["found"] is False
 
 
+def test_expand_with_contains_filters_records(client: TestClient) -> None:
+    records = json.dumps([{"id": i, "city": "Tbilisi" if i == 7 else "Other"} for i in range(60)])
+    ref = client.post("/v1/compress", json={"content": records}).json()["ccr_key"]
+    assert ref is not None
+    resp = client.get(f"/v1/expand/{ref}", params={"contains": "Tbilisi"})
+    body = resp.json()
+    assert body["found"] is True
+    assert body["matches"] == 1
+    assert json.loads(body["content"]) == [{"id": 7, "city": "Tbilisi"}]
+
+
 # ── GET /dashboard ────────────────────────────────────────────────────────────
 
 

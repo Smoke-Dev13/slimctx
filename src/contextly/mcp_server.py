@@ -40,6 +40,7 @@ from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
+from contextly.expand import filter_original
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -116,8 +117,9 @@ async def _compress(
         "expandable": expandable,
         "expand_ref": ccr_key if expandable else None,
         "hint": (
-            f"Content was compressed with loss. Call expand('{ccr_key}') to "
-            "retrieve the full original if you need a detail that was dropped."
+            f"Content was compressed with loss. Call expand('{ccr_key}') for the "
+            f"full original, or expand('{ccr_key}', contains='...') to pull back "
+            "just the matching records/lines."
             if expandable
             else None
         ),
@@ -184,15 +186,19 @@ async def retrieve_original(key: str) -> str:
 @mcp.tool(
     name="expand",
     description=(
-        "Expand a compressed result back to its full original content. Pass the "
-        "expand_ref (or ccr_key) returned by compress_text. Use this whenever a "
-        "compressed response was marked expandable and you need a record, line, "
-        "or detail that compression may have dropped."
+        "Expand a compressed result back to its original. Pass the expand_ref "
+        "(or ccr_key) from compress_text. Provide 'contains' to pull back only "
+        "the matching records (JSON) or lines (logs/text) instead of everything "
+        "— granular recovery of just the detail you need."
     ),
 )
-async def expand(ref: str) -> str:
-    """Return the full original content for an expand_ref / ccr_key."""
-    return await _retrieve(ref, _default_store)
+async def expand(ref: str, contains: str = "") -> str:
+    """Return the original for an expand_ref / ccr_key, optionally filtered."""
+    original = await _retrieve(ref, _default_store)
+    if contains:
+        filtered, _ = filter_original(original, contains)
+        return filtered
+    return original
 
 
 @mcp.tool(

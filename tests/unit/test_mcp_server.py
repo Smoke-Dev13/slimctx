@@ -224,6 +224,22 @@ def test_mcp_has_expand_tool() -> None:
     assert "expand" in tool_names
 
 
+@pytest.mark.asyncio
+async def test_expand_with_contains_filters(fresh_store: CCRStore) -> None:
+    import json as _json
+
+    from contextly.expand import filter_original
+    from contextly.mcp_server import _retrieve
+
+    records = _json.dumps([{"id": 1, "tag": "keep"}, {"id": 2, "tag": "drop"}])
+    key = fresh_store.store(records)
+    # Mirror the expand tool's filtering path.
+    original = await _retrieve(key, fresh_store)
+    filtered, n = filter_original(original, "keep")
+    assert n == 1
+    assert _json.loads(filtered) == [{"id": 1, "tag": "keep"}]
+
+
 def test_mcp_has_expected_tools() -> None:
     tools = mcp._tool_manager.list_tools()
     assert len(tools) == 4

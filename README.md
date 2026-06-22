@@ -215,9 +215,14 @@ Retrieve the original content stored under a CCR key.
 
 Expand a compressed result back to its full original — the recovery path for lossy compression. `ref` is the `ccr_key` / `expand_ref` from the compression response or the `X-Contextly-CCR-Keys` header.
 
+Add `?contains=<substr>` for **granular** recovery — only the matching records (JSON) or lines (logs/text), so the agent spends tokens on just the detail it needs.
+
 ```json
-// 200
-{"ref": "a3f1c9e2b8d74501", "found": true, "content": "Your long document..."}
+// 200  GET /v1/expand/a3f1c9e2b8d74501
+{"ref": "a3f1c9e2b8d74501", "found": true, "content": "...", "matches": -1}
+
+// 200  GET /v1/expand/a3f1c9e2b8d74501?contains=order-8421
+{"ref": "a3f1c9e2b8d74501", "found": true, "content": "[{...}]", "matches": 1}
 
 // 404
 {"ref": "a3f1c9e2b8d74501", "found": false, "error": "Reference '...' not found or evicted."}
