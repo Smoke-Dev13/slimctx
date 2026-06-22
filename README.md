@@ -1,5 +1,9 @@
 ﻿# Contextly
 
+[![CI](https://github.com/Smoke-Dev13/slimctx/actions/workflows/ci.yml/badge.svg)](https://github.com/Smoke-Dev13/slimctx/actions/workflows/ci.yml)
+[![Demo & Accuracy](https://github.com/Smoke-Dev13/slimctx/actions/workflows/demo.yml/badge.svg)](https://github.com/Smoke-Dev13/slimctx/actions/workflows/demo.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Smart context optimization proxy for LLM APIs. Drop it in front of any OpenAI-compatible endpoint to compress large prompts, save tokens, and measure quality impact without changing a line of application code.
 
 ```
@@ -430,6 +434,33 @@ python scripts/benchmark_quality.py --model gpt-4o --query "find the unusual tra
 ```
 
 The script runs each compressor on a representative fixture and prints token savings next to an information-retention metric (records retained for JSON, numeric facts for prose, signatures for code), so you can judge the trade-off rather than just the headline savings. Wire your own corpus in by editing the fixtures at the top of the script.
+
+### Accuracy benchmark — does compression change the answers?
+
+Retention is a proxy; the real question is whether a model gives the *right* answer with less context. `scripts/accuracy_benchmark.py` asks the same questions over a synthetic record set under three strategies — `full`, `compressed` (lossy), and `safe` — calls a real LLM, and grades answers against gold values:
+
+```bash
+# Any OpenAI-compatible endpoint (OpenAI, OpenRouter, local Ollama, or the proxy itself)
+export OPENROUTER_API_KEY=sk-or-...
+python scripts/accuracy_benchmark.py \
+    --base-url https://openrouter.ai/api/v1 \
+    --model google/gemma-4-31b-it:free
+
+# Validate the harness offline, no API key (deterministic oracle model):
+python scripts/accuracy_benchmark.py --self-test
+```
+
+The harness is verified offline on every push (the **Demo & Accuracy** workflow). To produce **real LLM numbers**, add an `OPENROUTER_API_KEY` repository secret and run that workflow manually (Actions → *Demo & Accuracy Benchmark* → *Run workflow*); results are written to the run summary.
+
+Harness self-test output (deterministic *oracle* model — illustrates the mechanism, **not** real-LLM accuracy; run the workflow for live figures):
+
+| Strategy | Accuracy | Mean context tokens |
+|---|---:|---:|
+| full | 100% | 5169 |
+| compressed | 31% | 70 |
+| safe | 100% | 5169 |
+
+The pattern is the whole point: dropping records to shrink context to ~1% collapses lookup accuracy, while `safe` mode keeps every record and matches `full`. On *your* model and data the exact figures will differ — measure them before trusting compression in production.
 
 ---
 

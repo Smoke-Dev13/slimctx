@@ -1,0 +1,80 @@
+name: Demo & Accuracy Benchmark
+
+# Two jobs:
+#   * self-test   — runs on every push/PR, validates the benchmark harness
+#                   offline with a deterministic oracle model (no API key).
+#   * accuracy    — manual (workflow_dispatch). Runs the *real* benchmark against
+#                   an OpenAI-compatible endpoint and writes the results table to
+#                   the run summary. Requires the OPENROUTER_API_KEY repo secret.
+#
+# The API key is read only from the secret — it is never stored in the repo.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "OpenAI-compatible base URL"
+        default: "https://openrouter.ai/api/v1"
+      model:
+        description: "Model id"
+        default: "google/gemma-4-31b-it:free"
+      lookups:
+        description: "Number of lookup questions"
+        default: "12"
+
+jobs:
+  self-test:
+    name: Harness self-test (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install --system -e ".[dev]"
+      - name: Validate benchmark harness without network
+        run: python scripts/accuracy_benchmark.py --self-test
+
+  accuracy:
+    name: Real accuracy benchmark
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install --system -e ".[dev]"
+      - name: Download tokenizer encodings
+        run: python scripts/download_encodings.py
+      - name: Run accuracy benchmark
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY secret is not set. Add it in Settings → Secrets → Actions."
+            exit 1
+          fi
+          python scripts/accuracy_benchmark.py \
+            --base-url "${{ github.event.inputs.base_url }}" \
+            --model "${{ github.event.inputs.model }}" \
+            --lookups "${{ github.event.inputs.lookups }}" \
+            --sleep 2 | tee /tmp/report.md
+      - name: Publish results to run summary
+        if: always()
+        run: |
+          {
+            echo "## Contextly accuracy benchmark"
+            echo ""
+            sed -n '/# Accuracy benchmark/,$p' /tmp/report.md || true
+          } >> "$GITHUB_STEP_SUMMARY"
