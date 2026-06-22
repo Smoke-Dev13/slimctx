@@ -95,9 +95,14 @@ def create_app(config: Config) -> FastAPI:
     app.state.config = config
     content_router = ContentRouter()
     if config.compression_enabled:
-        content_router.register(JsonSmartCompressor())
+        # Lossy compressors drop records/sentences; skip them in safe mode so
+        # the model always sees the full JSON and prose. Code compression only
+        # strips comments and whitespace, so it stays enabled either way.
+        if not config.safe_mode:
+            content_router.register(JsonSmartCompressor())
         content_router.register(CodeCompressor())
-        content_router.register(ProseCompressor())
+        if not config.safe_mode:
+            content_router.register(ProseCompressor())
     app.state.content_router = content_router
     app.state.ccr_store = CCRStore()
     app.state.ab_monitor = ABMonitor()

@@ -60,6 +60,12 @@ def main() -> None:
     type=click.Choice(["debug", "info", "warning", "error"], case_sensitive=False),
 )
 @click.option("--no-compress", is_flag=True, default=False, help="Disable compression pipeline")
+@click.option(
+    "--safe-mode",
+    is_flag=True,
+    default=False,
+    help="Never drop JSON records or prose sentences (only strip code comments/whitespace)",
+)
 def proxy(
     host: str,
     port: int,
@@ -70,6 +76,7 @@ def proxy(
     workers: int,
     log_level: str,
     no_compress: bool,
+    safe_mode: bool,
 ) -> None:
     """Start the Contextly proxy server.
 
@@ -91,6 +98,7 @@ def proxy(
         workers=workers,
         log_level=log_level,
         compression_enabled=not no_compress,
+        safe_mode=safe_mode,
     )
     run(config)
 

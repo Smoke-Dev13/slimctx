@@ -10,9 +10,40 @@ Your app -> Contextly (localhost:4000) -> OpenAI / Anthropic / any LLM
 
 - Compresses prompt messages on the fly (prose, JSON, code -- each with a specialized algorithm)
 - Stores originals in a reversible CCR store so compressed context can be retrieved verbatim
-- Shadows a configurable fraction of requests to the original (uncompressed) upstream and scores quality with ROUGE-1 F1
+- Shadows a configurable fraction of requests to the original (uncompressed) upstream and scores quality with ROUGE-1 F1 **and a numeric-consistency check**
 - Exposes Prometheus metrics at `/metrics` and a JSON stats endpoint at `/stats`
 - Optionally runs as an MCP server (Claude Desktop / any MCP client)
+
+---
+
+## ⚠️ Compression is lossy by design
+
+Contextly does **not** losslessly pack your prompt. To save tokens it *drops information*: the JSON compressor samples a small subset of records, and the prose compressor keeps only the highest-scoring sentences. The model sees a **representative fraction** of your content, not all of it.
+
+Measured on the bundled fixtures (`python scripts/benchmark_quality.py`, model `gpt-4o`):
+
+| Content | Tokens saved | Information retained |
+|---|---:|---|
+| JSON (200 records) | **98%** | **2%** of records (5/200) |
+| Prose | 65% | 32% of numeric facts (9/28) |
+| Code | 63% | 100% of function/class signatures |
+
+**This is great for aggregate questions** ("what's the overall sentiment?", "roughly how many users churned?") **and dangerous for lookups** ("what is order #8421's total?", "list every failed transaction"). The dropped record might be the one that mattered.
+
+Mitigations Contextly ships with:
+
+- **`--safe-mode`** — never drops JSON records or prose sentences; only structure-preserving code compression runs (see below). Use this when answers must be complete.
+- **CCR retrieval** — every original is stored and retrievable by key, so agents can fetch the full content back on demand.
+- **A/B quality + numeric-consistency monitoring** — measure the actual degradation on *your* traffic before trusting it.
+
+### Is this for me?
+
+| Use case | Fit |
+|---|---|
+| Agents / RAG with a retrieval step (MCP `retrieve_original`, CCR keys) | ✅ Strong — lossy summary up front, full fidelity on demand |
+| Summarization, sentiment, topic, "gist" over long context | ✅ Good |
+| Cost control on exploratory analytics over large JSON | 🟡 With `--safe-mode` or careful A/B validation |
+| Exact lookups, audits, anything requiring every record/figure | ❌ Use `--safe-mode` or don't compress |
 
 ---
 
@@ -89,7 +120,12 @@ Options:
   --workers INTEGER            Uvicorn worker count  [default: 1]
   --log-level TEXT             [default: info]
   --no-compress                Disable compression pipeline
+  --safe-mode                  Never drop JSON records or prose sentences
 ```
+
+### Safe mode
+
+`--safe-mode` (or `CONTEXTLY_SAFE_MODE=true`) guarantees the model still sees **every** JSON record and **every** prose sentence. The lossy compressors (`json_smart` record sampling, `prose` sentence dropping) are removed from the routing chain, leaving only `code` (which strips comments and blank lines while preserving all logic) and `passthrough`. You trade most of the token savings for full fidelity — the right default when wrong answers are worse than expensive ones.
 
 ---
 
@@ -107,6 +143,7 @@ All settings can be set via environment variables with the `CONTEXTLY_` prefix o
 | `CONTEXTLY_UPSTREAM_BASE_URL` | -- | Explicit upstream base URL (overrides preset) |
 | `CONTEXTLY_UPSTREAM_API_KEY` | -- | Upstream API key (also reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `CONTEXTLY_COMPRESSION_ENABLED` | `true` | Enable/disable the compression pipeline |
+| `CONTEXTLY_SAFE_MODE` | `false` | Disable lossy compressors (keep every JSON record / prose sentence) |
 | `CONTEXTLY_TARGET_TOKEN_BUDGET` | -- | Optional token budget hint for budget-aware compressors |
 | `CONTEXTLY_AB_SAMPLE_RATE` | `0.0` | Fraction of requests to shadow for A/B quality measurement |
 
@@ -189,13 +226,16 @@ A/B quality regression report (populated when `ab_sample_rate > 0`).
 {
   "samples_total": 51,
   "quality": {"mean": 0.8721, "p10": 0.72, "p50": 0.88, "p90": 0.96},
+  "numeric_consistency": {"mean": 0.91, "p10": 0.5},
   "chars_saved": {"mean": 2140.3, "total": 109155},
   "by_compressor": {
-    "prose": {"samples": 38, "mean_quality": 0.89},
-    "json_smart": {"samples": 13, "mean_quality": 0.94}
+    "prose": {"samples": 38, "mean_quality": 0.89, "mean_numeric_consistency": 0.88},
+    "json_smart": {"samples": 13, "mean_quality": 0.94, "mean_numeric_consistency": 0.97}
   }
 }
 ```
+
+`numeric_consistency` is the fraction of numbers in the original-context response that survive in the compressed-context response. It catches a failure mode ROUGE-1 misses: two responses can share most words yet quote a different figure ("312 tickets" vs "47 tickets"). Watch the `p10` — a low tail means compression is occasionally corrupting facts even when mean quality looks healthy.
 
 #### `GET /metrics`
 
@@ -209,7 +249,7 @@ The content router selects a compressor per message in registration-priority ord
 
 | Compressor | Triggers on | Algorithm |
 |---|---|---|
-| `json_smart` | Valid JSON objects/arrays | Elides null/empty fields, rounds floats, truncates long string values |
+| `json_smart` | Valid JSON objects/arrays | **Samples a representative subset of records** (MinHash clustering + stratified sampling, keeps outliers), then elides null/empty fields, rounds floats, truncates long strings |
 | `prose` | Natural-language text above a length threshold | YAKE keyword extraction; keeps top-K sentences by keyword density |
 | `code` | Source code (detected by AST parse) | tree-sitter parse; removes comments and blank lines, preserves structure |
 | `passthrough` | Everything else | Returns content unchanged |
@@ -228,10 +268,12 @@ When `CONTEXTLY_AB_SAMPLE_RATE > 0`, a shadow request fires for a random fractio
 
 1. The main request proceeds with compressed context -- response is returned immediately.
 2. In a background task, the **original** (uncompressed) context is sent to the same upstream.
-3. Both responses are scored with word-level ROUGE-1 F1 (precision/recall harmonic mean).
-4. The score is stored in a ring buffer (1 000 samples max) and emitted to Prometheus.
+3. Both responses are scored two ways: word-level ROUGE-1 F1 (precision/recall harmonic mean) and **numeric consistency** (fraction of figures preserved).
+4. The scores are stored in a ring buffer (1 000 samples max) and emitted to Prometheus.
 
-A score of `1.0` means the compressed-context response is word-for-word identical to the original. Streaming requests are excluded because buffering the response would negate the point of streaming.
+A ROUGE-1 score of `1.0` means the compressed-context response is word-for-word identical to the original; a numeric-consistency of `1.0` means no figure was changed. The two are complementary — ROUGE-1 measures overall wording, numeric consistency guards the specific facts (counts, prices, dates) that lossy compression is most likely to corrupt silently. Streaming requests are excluded because buffering the response would negate the point of streaming.
+
+> **Caveat:** ROUGE-1 compares the compressed-context answer to the *full-context* answer, not to ground truth — it tells you how much the answer *changed*, not whether it was right to begin with. For high-stakes use, pair it with an LLM-judge or task-specific exact-match eval on a held-out set.
 
 View results at `GET /quality` or via the `contextly_ab_quality_score` histogram in Prometheus.
 
@@ -374,6 +416,40 @@ contextly mcp (FastMCP / stdio)
 +-- tool: retrieve_original
 +-- tool: compression_stats
 ```
+
+---
+
+## Benchmarks
+
+Reproduce the savings-vs-retention numbers locally — no API key or network required:
+
+```bash
+python scripts/benchmark_quality.py --model gpt-4o
+# narrow the aggressiveness with a query:
+python scripts/benchmark_quality.py --model gpt-4o --query "find the unusual transaction"
+```
+
+The script runs each compressor on a representative fixture and prints token savings next to an information-retention metric (records retained for JSON, numeric facts for prose, signatures for code), so you can judge the trade-off rather than just the headline savings. Wire your own corpus in by editing the fixtures at the top of the script.
+
+---
+
+## How Contextly compares to LLMLingua
+
+[LLMLingua / LLMLingua-2](https://github.com/microsoft/LLMLingua) (Microsoft) is the best-known prompt-compression project. It uses a small language model to score and drop low-information *tokens*, and is excellent at squeezing verbose natural-language prompts.
+
+Contextly is a different shape:
+
+| | Contextly | LLMLingua |
+|---|---|---|
+| Unit of compression | Records / sentences / code structure | Individual tokens |
+| Deployment | **Transparent OpenAI-compatible proxy** — zero app changes | Library you call in-process |
+| Structured data (JSON) | First-class (MinHash clustering + stratified sampling) | Not the focus |
+| Reversibility | **CCR store** — fetch any original back by key | None |
+| Runtime cost | No model inference on the hot path | Runs a compressor LM per request |
+| Quality monitoring | **Built-in shadow A/B + numeric consistency** | Bring your own |
+| Best at | Agents/RAG, JSON-heavy payloads, drop-in cost control | Dense token-level reduction of prose prompts |
+
+They are complementary: LLMLingua minimizes tokens within text you've decided to keep; Contextly decides *what to keep* at the record/sentence level and gives you a retrieval escape hatch. If your bottleneck is huge JSON payloads or you want a proxy you can drop in front of an existing app without code changes, Contextly fits. If you need maximal token reduction of prose and can call a library, LLMLingua is strong.
 
 ---
 

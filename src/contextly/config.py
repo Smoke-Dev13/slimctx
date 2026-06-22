@@ -55,6 +55,11 @@ class Config(BaseSettings):
     # ── Compression ─────────────────────────────────────────────────────────
     compression_enabled: bool = True
     target_token_budget: int | None = None
+    # Safe mode guarantees the model still sees every JSON record and every
+    # prose sentence: the lossy compressors (json_smart record sampling, prose
+    # sentence dropping) are disabled, leaving only structure-preserving code
+    # compression (comment/whitespace stripping). Trades savings for fidelity.
+    safe_mode: bool = False
 
     # ── A/B Quality ─────────────────────────────────────────────────────────
     ab_sample_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0

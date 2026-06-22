@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from collections import Counter, deque
@@ -71,6 +72,49 @@ def _quality_score(reference: str, candidate: str) -> float:
     return 2.0 * precision * recall / (precision + recall)
 
 
+_NUMBER_RE = re.compile(r"-?\d[\d,]*\.?\d*")
+
+
+def _extract_numbers(text: str) -> Counter[str]:
+    """Return a multiset of normalised numeric tokens found in *text*.
+
+    Thousands separators are stripped and trailing zeros normalised so that
+    "1,000", "1000", and "1000.00" compare equal. Numbers are exactly where
+    lossy compression silently corrupts answers (counts, prices, dates), and
+    word-level ROUGE-1 treats every digit-string as an interchangeable token.
+    """
+    numbers: Counter[str] = Counter()
+    for raw in _NUMBER_RE.findall(text):
+        cleaned = raw.replace(",", "")
+        try:
+            numbers[repr(float(cleaned))] += 1
+        except ValueError:
+            continue
+    return numbers
+
+
+def _numeric_consistency(reference: str, candidate: str) -> float:
+    """Fraction of numbers in *reference* that also appear in *candidate*.
+
+    Returns 1.0 when the reference contains no numbers (nothing to corrupt).
+    A low score flags that compression changed a factual figure even when the
+    overall ROUGE-1 score looks healthy.
+
+    Args:
+        reference: Response produced from the original (full) context.
+        candidate: Response produced from the compressed context.
+
+    Returns:
+        Float in [0.0, 1.0]; 1.0 means every reference number is preserved.
+    """
+    ref_numbers = _extract_numbers(reference)
+    if not ref_numbers:
+        return 1.0
+    cand_numbers = _extract_numbers(candidate)
+    preserved = sum((ref_numbers & cand_numbers).values())
+    return preserved / sum(ref_numbers.values())
+
+
 def _percentile(sorted_values: list[float], p: float) -> float:
     """Return the *p*-th percentile from a pre-sorted list (0 ≤ p ≤ 100)."""
     n = len(sorted_values)
@@ -108,6 +152,9 @@ class ABSample:
     quality_score: float
     reference_response_len: int
     compressed_response_len: int
+    # Fraction of numbers in the reference response preserved in the compressed
+    # response (1.0 = none lost). Defaults to 1.0 for back-compat.
+    numeric_consistency: float = 1.0
 
 
 # ── Monitor ────────────────────────────────────────────────────────────────────
@@ -235,11 +282,12 @@ class ABMonitor:
             }
 
         scores = sorted(s.quality_score for s in samples)
+        numeric_scores = [s.numeric_consistency for s in samples]
         chars_saved_list = [s.original_chars - s.compressed_chars for s in samples]
 
-        by_compressor: dict[str, list[float]] = {}
+        by_compressor: dict[str, list[ABSample]] = {}
         for s in samples:
-            by_compressor.setdefault(s.compressor, []).append(s.quality_score)
+            by_compressor.setdefault(s.compressor, []).append(s)
 
         return {
             "samples_total": n,
@@ -249,6 +297,10 @@ class ABMonitor:
                 "p50": round(_percentile(scores, 50), 4),
                 "p90": round(_percentile(scores, 90), 4),
             },
+            "numeric_consistency": {
+                "mean": round(mean(numeric_scores), 4),
+                "p10": round(_percentile(sorted(numeric_scores), 10), 4),
+            },
             "chars_saved": {
                 "mean": round(mean(chars_saved_list), 1),
                 "total": sum(chars_saved_list),
@@ -256,7 +308,8 @@ class ABMonitor:
             "by_compressor": {
                 k: {
                     "samples": len(v),
-                    "mean_quality": round(mean(v), 4),
+                    "mean_quality": round(mean(s.quality_score for s in v), 4),
+                    "mean_numeric_consistency": round(mean(s.numeric_consistency for s in v), 4),
                 }
                 for k, v in sorted(by_compressor.items())
             },
@@ -304,6 +357,7 @@ async def run_shadow_ab(
         ref_resp = await http_client.post(upstream_url, headers=headers, json=original_payload)
         reference_text = _extract_response_text(ref_resp.content)
         score = _quality_score(reference_text, compressed_response_text)
+        numeric = _numeric_consistency(reference_text, compressed_response_text)
         ab_monitor.record_sample(
             ABSample(
                 timestamp=time.time(),
@@ -314,6 +368,7 @@ async def run_shadow_ab(
                 quality_score=score,
                 reference_response_len=len(reference_text),
                 compressed_response_len=len(compressed_response_text),
+                numeric_consistency=numeric,
             )
         )
     except Exception:

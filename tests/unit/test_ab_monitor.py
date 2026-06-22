@@ -10,6 +10,7 @@ from contextly.ab_monitor import (
     ABMonitor,
     ABSample,
     _extract_response_text,
+    _numeric_consistency,
     _percentile,
     _quality_score,
 )
@@ -64,6 +65,34 @@ def test_quality_score_in_range() -> None:
 def test_quality_score_case_insensitive() -> None:
     s1 = _quality_score("Hello World", "hello world")
     assert s1 == pytest.approx(1.0)
+
+
+# ── _numeric_consistency ───────────────────────────────────────────────────────
+
+
+def test_numeric_consistency_no_numbers_in_reference() -> None:
+    assert _numeric_consistency("no digits here", "still none") == pytest.approx(1.0)
+
+
+def test_numeric_consistency_all_preserved() -> None:
+    ref = "Revenue was 1,240,000 and churn was 3 percent."
+    cand = "They reported 1240000 in revenue at 3 percent churn."
+    assert _numeric_consistency(ref, cand) == pytest.approx(1.0)
+
+
+def test_numeric_consistency_thousands_separator_normalised() -> None:
+    assert _numeric_consistency("total 1,000", "total 1000") == pytest.approx(1.0)
+
+
+def test_numeric_consistency_corrupted_number_detected() -> None:
+    # ROUGE-1 would score this highly; the numeric figure is wrong.
+    score = _numeric_consistency("the count is 312", "the count is 47")
+    assert score == pytest.approx(0.0)
+
+
+def test_numeric_consistency_partial() -> None:
+    score = _numeric_consistency("values 10 and 20 and 30", "values 10 and 20")
+    assert score == pytest.approx(2.0 / 3.0, abs=1e-4)
 
 
 # ── _percentile ────────────────────────────────────────────────────────────────
@@ -235,7 +264,9 @@ def test_stats_compression_ratio_mean(monitor: ABMonitor) -> None:
 # ── ABMonitor — record_sample ─────────────────────────────────────────────────
 
 
-def _make_sample(quality: float, compressor: str = "prose") -> ABSample:
+def _make_sample(
+    quality: float, compressor: str = "prose", numeric_consistency: float = 1.0
+) -> ABSample:
     return ABSample(
         timestamp=time.time(),
         model="gpt-4o",
@@ -245,6 +276,18 @@ def _make_sample(quality: float, compressor: str = "prose") -> ABSample:
         quality_score=quality,
         reference_response_len=200,
         compressed_response_len=180,
+        numeric_consistency=numeric_consistency,
+    )
+
+
+def test_quality_report_includes_numeric_consistency() -> None:
+    monitor = ABMonitor(max_samples=10)
+    monitor.record_sample(_make_sample(0.9, "prose", numeric_consistency=0.5))
+    monitor.record_sample(_make_sample(0.8, "prose", numeric_consistency=1.0))
+    report = monitor.quality_report()
+    assert report["numeric_consistency"]["mean"] == pytest.approx(0.75, abs=1e-4)
+    assert report["by_compressor"]["prose"]["mean_numeric_consistency"] == pytest.approx(
+        0.75, abs=1e-4
     )
 
 

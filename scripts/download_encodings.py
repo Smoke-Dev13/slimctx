@@ -8,6 +8,7 @@ The script checks tiktoken's local cache first to avoid redundant downloads.
 Files are placed in src/contextly/tokenizer/data/ and bundled into the wheel
 via hatchling's default package-data inclusion.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -17,12 +18,8 @@ import urllib.request
 from pathlib import Path
 
 _ENCODING_URLS: dict[str, str] = {
-    "cl100k_base": (
-        "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
-    ),
-    "o200k_base": (
-        "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
-    ),
+    "cl100k_base": ("https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"),
+    "o200k_base": ("https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"),
 }
 
 _DATA_DIR = Path(__file__).parent.parent / "src" / "contextly" / "tokenizer" / "data"
@@ -30,9 +27,7 @@ _DATA_DIR = Path(__file__).parent.parent / "src" / "contextly" / "tokenizer" / "
 
 def _tiktoken_cache_path(url: str) -> Path:
     """Return the path where tiktoken caches a given URL (SHA-256 of URL)."""
-    cache_dir = Path(
-        os.environ.get("TIKTOKEN_CACHE_DIR", Path.home() / ".cache" / "tiktoken")
-    )
+    cache_dir = Path(os.environ.get("TIKTOKEN_CACHE_DIR", Path.home() / ".cache" / "tiktoken"))
     return cache_dir / hashlib.sha256(url.encode()).hexdigest()
 
 
