@@ -24,7 +24,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from contextly.ab_monitor import ABMonitor
-from contextly.ccr import CCRStore
+from contextly.ccr import CCRStore, SQLiteCCRStore
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.logs import LogCompressor
@@ -116,7 +116,9 @@ def create_app(config: Config) -> FastAPI:
     # the X-Contextly-Mode header: the default chain and a lossless "safe" chain.
     app.state.content_router = _build_router(config.compression_enabled, safe=config.safe_mode)
     app.state.content_router_safe = _build_router(config.compression_enabled, safe=True)
-    app.state.ccr_store = CCRStore()
+    app.state.ccr_store = (
+        SQLiteCCRStore(config.ccr_path) if config.ccr_backend == "sqlite" else CCRStore()
+    )
     app.state.ab_monitor = ABMonitor()
     app.include_router(obs_router)
     app.include_router(openai_router)

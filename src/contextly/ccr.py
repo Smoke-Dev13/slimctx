@@ -17,9 +17,17 @@ Design:
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import threading
+import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
+
+
+def content_key(content: str) -> str:
+    """Return the 16-hex-char retrieval key for *content* (SHA-256 prefix)."""
+    return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
 class CCRStore:
@@ -53,7 +61,7 @@ class CCRStore:
         Returns:
             16-character hex string that can be passed to retrieve().
         """
-        key = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+        key = content_key(content)
         with self._lock:
             if key in self._store:
                 self._store.move_to_end(key)
@@ -110,3 +118,77 @@ class CCRStore:
     def __len__(self) -> int:
         with self._lock:
             return len(self._store)
+
+
+class SQLiteCCRStore(CCRStore):
+    """Disk-backed CCR store — survives restarts and is shared across processes.
+
+    Drop-in for :class:`CCRStore` backed by a SQLite file (WAL mode). Because all
+    uvicorn workers open the same database file, an original stored by one worker
+    is retrievable by any other — unlike the per-process in-memory store, which
+    makes ``expand``/``retrieve`` unreliable under ``--workers > 1``.
+
+    Args:
+        path: Database file path (parent directories are created).
+        max_entries: Soft cap; the oldest rows are evicted past this count.
+    """
+
+    def __init__(self, path: str, max_entries: int = 10_000) -> None:
+        super().__init__(max_entries)
+        Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(Path(path).expanduser()), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS ccr "
+            "(key TEXT PRIMARY KEY, content TEXT NOT NULL, created REAL NOT NULL)"
+        )
+        self._conn.commit()
+
+    def store(self, content: str) -> str:
+        key = content_key(content)
+        with self._lock:
+            exists = self._conn.execute("SELECT 1 FROM ccr WHERE key=?", (key,)).fetchone()
+            if exists is None:
+                self._conn.execute(
+                    "INSERT INTO ccr(key, content, created) VALUES (?, ?, ?)",
+                    (key, content, time.time()),
+                )
+                self._n_stored += 1
+                count = self._conn.execute("SELECT COUNT(*) FROM ccr").fetchone()[0]
+                if count > self._max:
+                    self._conn.execute(
+                        "DELETE FROM ccr WHERE key IN "
+                        "(SELECT key FROM ccr ORDER BY created ASC LIMIT ?)",
+                        (count - self._max,),
+                    )
+                self._conn.commit()
+        return key
+
+    def retrieve(self, key: str) -> str | None:
+        with self._lock:
+            self._n_retrieved += 1
+            row = self._conn.execute("SELECT content FROM ccr WHERE key=?", (key,)).fetchone()
+            if row is not None:
+                self._n_hits += 1
+                return str(row[0])
+            self._n_misses += 1
+            return None
+
+    def stats(self) -> dict[str, Any]:
+        with self._lock:
+            n_entries = int(self._conn.execute("SELECT COUNT(*) FROM ccr").fetchone()[0])
+            hit_rate = round(self._n_hits / self._n_retrieved, 4) if self._n_retrieved > 0 else 0.0
+            return {
+                "current_entries": n_entries,
+                "max_entries": self._max,
+                "total_stored": self._n_stored,
+                "total_retrieved": self._n_retrieved,
+                "hits": self._n_hits,
+                "misses": self._n_misses,
+                "hit_rate": hit_rate,
+                "backend": "sqlite",
+            }
+
+    def __len__(self) -> int:
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM ccr").fetchone()[0])

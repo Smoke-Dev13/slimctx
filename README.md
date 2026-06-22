@@ -147,6 +147,8 @@ All settings can be set via environment variables with the `CONTEXTLY_` prefix o
 | `CONTEXTLY_UPSTREAM_API_KEY` | -- | Upstream API key (also reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `CONTEXTLY_COMPRESSION_ENABLED` | `true` | Enable/disable the compression pipeline |
 | `CONTEXTLY_SAFE_MODE` | `false` | Disable lossy prose compression (JSON stays lossless either way) |
+| `CONTEXTLY_CCR_BACKEND` | `memory` | Reversible store: `memory` or `sqlite` (persisted + shared across workers) |
+| `CONTEXTLY_CCR_PATH` | `.contextly/ccr.db` | SQLite file path when `CCR_BACKEND=sqlite` |
 | `CONTEXTLY_TARGET_TOKEN_BUDGET` | -- | Optional token budget hint for budget-aware compressors |
 | `CONTEXTLY_AB_SAMPLE_RATE` | `0.0` | Fraction of requests to shadow for A/B quality measurement |
 
@@ -288,6 +290,8 @@ When a compressor reduces content, the original is stored in an in-memory LRU ca
 **Expand-on-demand** turns this into a safety net for *lossy* compression. Whenever compression drops information, the result is marked `expandable` with an `expand_ref`, and the full original can be pulled back via `GET /v1/expand/{ref}` or the MCP `expand` tool. This is what lets an agent compress aggressively up front yet recover any specific record, line, or figure it later needs — so token savings never become permanent data loss.
 
 The store holds up to 10 000 entries; oldest entries are evicted on overflow (LRU order).
+
+By default the store is in-memory (per process). For multi-worker deployments (`--workers > 1`) or to keep references across restarts, switch to the SQLite backend with `--ccr-backend sqlite` (or `CONTEXTLY_CCR_BACKEND=sqlite`): all workers share one database file, so a reference stored by one worker expands correctly from any other.
 
 ---
 

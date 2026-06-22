@@ -66,6 +66,19 @@ def main() -> None:
     default=False,
     help="Never drop JSON records or prose sentences (only strip code comments/whitespace)",
 )
+@click.option(
+    "--ccr-backend",
+    type=click.Choice(["memory", "sqlite"], case_sensitive=False),
+    default="memory",
+    show_default=True,
+    help="Reversible store backend; use 'sqlite' to persist and share across --workers",
+)
+@click.option(
+    "--ccr-path",
+    default=".contextly/ccr.db",
+    show_default=True,
+    help="SQLite database path (when --ccr-backend sqlite)",
+)
 def proxy(
     host: str,
     port: int,
@@ -77,6 +90,8 @@ def proxy(
     log_level: str,
     no_compress: bool,
     safe_mode: bool,
+    ccr_backend: str,
+    ccr_path: str,
 ) -> None:
     """Start the Contextly proxy server.
 
@@ -99,6 +114,8 @@ def proxy(
         log_level=log_level,
         compression_enabled=not no_compress,
         safe_mode=safe_mode,
+        ccr_backend=ccr_backend.lower(),  # type: ignore[arg-type]
+        ccr_path=ccr_path,
     )
     run(config)
 

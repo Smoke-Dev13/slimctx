@@ -8,7 +8,7 @@ Precedence: explicit kwargs > env vars > .env file > defaults.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +60,11 @@ class Config(BaseSettings):
     # sentence dropping) are disabled, leaving only structure-preserving code
     # compression (comment/whitespace stripping). Trades savings for fidelity.
     safe_mode: bool = False
+    # CCR (reversible store) backend: "memory" (per-process, default) or "sqlite"
+    # (a file shared across workers and persisted across restarts — required for
+    # correct expand/retrieve when running with --workers > 1).
+    ccr_backend: Literal["memory", "sqlite"] = "memory"
+    ccr_path: str = ".contextly/ccr.db"
 
     # ── A/B Quality ─────────────────────────────────────────────────────────
     ab_sample_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
