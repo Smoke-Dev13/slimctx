@@ -21,7 +21,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response, StreamingResponse
 
 from contextly.ab_monitor import _extract_response_text, run_shadow_ab
-from contextly.deps import ABMonitorDep, CCRDep, ConfigDep, ContentRouterDep, HttpClientDep
+from contextly.ccr import CCRStore
+from contextly.compressors.registry import ContentRouter
+from contextly.config import Config
+from contextly.deps import (
+    ABMonitorDep,
+    CCRDep,
+    ConfigDep,
+    ContentRouterDep,
+    HttpClientDep,
+    SafeContentRouterDep,
+)
 from contextly.metrics import observe_request
 
 # Keeps strong references to background tasks so they aren't GC'd before completion.
@@ -55,6 +65,85 @@ async def _proxy_stream(
             yield chunk
 
 
+def _select_router(
+    request: Request,
+    config: Config,
+    default_router: ContentRouter,
+    safe_router: ContentRouter,
+) -> ContentRouter | None:
+    """Pick the compressor chain for a request, honouring X-Contextly-Mode.
+
+    Header values: ``off`` disables compression for the call, ``safe`` forces the
+    lossless chain, anything else (or absent) uses the configured default. Returns
+    None when no compression should run.
+    """
+    if not config.compression_enabled:
+        return None
+    mode = request.headers.get("X-Contextly-Mode", "").strip().lower()
+    if mode == "off":
+        return None
+    if mode == "safe":
+        return safe_router
+    return default_router
+
+
+def _compress_messages(
+    messages: list[dict[str, Any]],
+    query: str,
+    router: ContentRouter,
+    ccr_store: CCRStore,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
+    """Compress each message's text, returning new messages, totals, and CCR keys.
+
+    Handles both string content and OpenAI/Anthropic content-block lists (only
+    ``{"type": "text", "text": ...}`` parts are compressed). Originals are stored
+    in the CCR store whenever compression reduced the text.
+    """
+    out: list[dict[str, Any]] = []
+    orig = comp = saved = 0
+    dominant = "passthrough"
+    ccr_keys: dict[str, str] = {}
+
+    def _do(text: str, key: str) -> str:
+        nonlocal orig, comp, saved, dominant
+        result = router.select(text, query).compress(text, query)
+        orig += result.original_length
+        comp += result.compressed_length
+        saved += result.tokens_saved_estimate
+        if result.compression_ratio < 1.0:
+            dominant = result.compressor_name
+            ccr_keys[key] = ccr_store.store(text)
+        return result.content
+
+    for i, msg in enumerate(messages):
+        content = msg.get("content", "")
+        if isinstance(content, str) and content:
+            out.append({**msg, "content": _do(content, f"msg:{i}")})
+        elif isinstance(content, list):
+            parts: list[Any] = []
+            for j, part in enumerate(content):
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and isinstance(part.get("text"), str)
+                    and part["text"]
+                ):
+                    parts.append({**part, "text": _do(part["text"], f"msg:{i}:{j}")})
+                else:
+                    parts.append(part)
+            out.append({**msg, "content": parts})
+        else:
+            out.append(msg)
+
+    totals = {
+        "original_chars": orig,
+        "compressed_chars": comp,
+        "tokens_saved": saved,
+        "dominant": dominant,
+    }
+    return out, totals, ccr_keys
+
+
 def _extract_last_user_query(payload: dict[str, Any]) -> str:
     """Extract the last user-role message text for query-aware compression."""
     for msg in reversed(payload.get("messages", [])):
@@ -75,6 +164,7 @@ async def chat_completions(
     config: ConfigDep,
     http_client: HttpClientDep,
     content_router: ContentRouterDep,
+    safe_content_router: SafeContentRouterDep,
     ccr_store: CCRDep,
     ab_monitor: ABMonitorDep,
 ) -> Response:
@@ -116,23 +206,16 @@ async def chat_completions(
     dominant_compressor: str = "passthrough"
     ccr_keys: dict[str, str] = {}
 
-    if config.compression_enabled:
+    router = _select_router(request, config, content_router, safe_content_router)
+    if router is not None:
         query = _extract_last_user_query(payload)
-        compressed_messages: list[dict[str, Any]] = []
-        for i, msg in enumerate(payload.get("messages", [])):
-            content = msg.get("content", "")
-            if isinstance(content, str) and content:
-                compressor = content_router.select(content, query)
-                result = compressor.compress(content, query)
-                total_original_chars += result.original_length
-                total_compressed_chars += result.compressed_length
-                total_tokens_saved_estimate += result.tokens_saved_estimate
-                if result.compression_ratio < 1.0:
-                    dominant_compressor = result.compressor_name
-                    ccr_keys[f"msg:{i}"] = ccr_store.store(content)
-                compressed_messages.append({**msg, "content": result.content})
-            else:
-                compressed_messages.append(msg)
+        compressed_messages, totals, ccr_keys = _compress_messages(
+            payload.get("messages", []), query, router, ccr_store
+        )
+        total_original_chars = totals["original_chars"]
+        total_compressed_chars = totals["compressed_chars"]
+        total_tokens_saved_estimate = totals["tokens_saved"]
+        dominant_compressor = totals["dominant"]
         payload = {**payload, "messages": compressed_messages}
 
     if total_original_chars > 0:
@@ -216,13 +299,25 @@ async def anthropic_messages(
     request: Request,
     config: ConfigDep,
     http_client: HttpClientDep,
+    content_router: ContentRouterDep,
+    safe_content_router: SafeContentRouterDep,
+    ccr_store: CCRDep,
+    ab_monitor: ABMonitorDep,
 ) -> Response:
-    """Pass-through for Anthropic-style /v1/messages requests.
+    """Proxy Anthropic-style /v1/messages with compression.
+
+    Compresses each message's text (string or text content blocks) the same way
+    as /v1/chat/completions, honouring the X-Contextly-Mode header. Originals go
+    to the CCR store; keys appear in X-Contextly-CCR-Keys.
 
     Args:
         request: Incoming FastAPI request.
         config: Resolved runtime configuration.
         http_client: Shared async HTTP client.
+        content_router: Default compressor chain.
+        safe_content_router: Lossless compressor chain (for mode=safe).
+        ccr_store: CCR reversible store.
+        ab_monitor: A/B quality monitor (running counters).
 
     Returns:
         Proxied upstream response.
@@ -230,14 +325,34 @@ async def anthropic_messages(
     raw_body = await request.body()
     payload: dict[str, Any] = json.loads(raw_body)
     is_streaming: bool = bool(payload.get("stream", False))
+    ccr_keys: dict[str, str] = {}
+
+    router = _select_router(request, config, content_router, safe_content_router)
+    if router is not None:
+        query = _extract_last_user_query(payload)
+        compressed_messages, totals, ccr_keys = _compress_messages(
+            payload.get("messages", []), query, router, ccr_store
+        )
+        payload = {**payload, "messages": compressed_messages}
+        if totals["original_chars"] > 0:
+            ab_monitor.record_request(
+                original_chars=totals["original_chars"],
+                compressed_chars=totals["compressed_chars"],
+                compressor_name=totals["dominant"],
+                tokens_saved_estimate=totals["tokens_saved"],
+            )
 
     upstream_url = f"{config.resolved_upstream_url()}/v1/messages"
     headers = _build_upstream_headers(request, config.upstream_api_key)
+    extra_headers: dict[str, str] = {}
+    if ccr_keys:
+        extra_headers["X-Contextly-CCR-Keys"] = json.dumps(ccr_keys)
 
     if is_streaming:
         return StreamingResponse(
             _proxy_stream(http_client, upstream_url, headers, payload),
             media_type="text/event-stream",
+            headers=extra_headers,
         )
 
     upstream_resp = await http_client.post(upstream_url, headers=headers, json=payload)
@@ -245,6 +360,7 @@ async def anthropic_messages(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
         media_type="application/json",
+        headers=extra_headers,
     )
 
 

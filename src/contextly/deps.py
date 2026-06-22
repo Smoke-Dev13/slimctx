@@ -30,6 +30,10 @@ def _get_content_router(request: Request) -> ContentRouter:
     return cast(ContentRouter, request.app.state.content_router)
 
 
+def _get_safe_content_router(request: Request) -> ContentRouter:
+    return cast(ContentRouter, request.app.state.content_router_safe)
+
+
 def _get_ccr_store(request: Request) -> CCRStore:
     return cast(CCRStore, request.app.state.ccr_store)
 
@@ -41,5 +45,6 @@ def _get_ab_monitor(request: Request) -> ABMonitor:
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
+SafeContentRouterDep = Annotated[ContentRouter, Depends(_get_safe_content_router)]
 CCRDep = Annotated[CCRStore, Depends(_get_ccr_store)]
 ABMonitorDep = Annotated[ABMonitor, Depends(_get_ab_monitor)]

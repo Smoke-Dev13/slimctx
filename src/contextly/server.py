@@ -76,6 +76,24 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("contextly_stopped")
 
 
+def _build_router(compression_enabled: bool, *, safe: bool) -> ContentRouter:
+    """Build a content router.
+
+    json_table (lossless JSON) and code compression run in every mode. The lossy
+    compressors — log folding and prose sentence-dropping — are added only when
+    not ``safe``. The lossy json_smart record sampler is never auto-registered;
+    opt into it explicitly when a representative sample is enough.
+    """
+    router = ContentRouter()
+    if compression_enabled:
+        router.register(JsonTableCompressor())
+        router.register(CodeCompressor())
+        if not safe:
+            router.register(LogCompressor())
+            router.register(ProseCompressor())
+    return router
+
+
 def create_app(config: Config) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -94,22 +112,10 @@ def create_app(config: Config) -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.config = config
-    content_router = ContentRouter()
-    if config.compression_enabled:
-        # json_table losslessly rewrites homogeneous JSON arrays (every record
-        # kept), so it is the default JSON path and is safe even in safe mode.
-        # Prose compression is lossy (drops sentences) and only runs outside
-        # safe mode; code compression strips comments/whitespace either way.
-        # The lossy json_smart record sampler is intentionally not in the default
-        # chain — opt into it explicitly when a representative sample is enough.
-        content_router.register(JsonTableCompressor())
-        content_router.register(CodeCompressor())
-        if not config.safe_mode:
-            # Log folding drops the exact values of duplicate lines (recoverable
-            # via expand), so it is lossy and excluded from safe mode.
-            content_router.register(LogCompressor())
-            content_router.register(ProseCompressor())
-    app.state.content_router = content_router
+    # Two routers are kept so a request can override the global mode per call via
+    # the X-Contextly-Mode header: the default chain and a lossless "safe" chain.
+    app.state.content_router = _build_router(config.compression_enabled, safe=config.safe_mode)
+    app.state.content_router_safe = _build_router(config.compression_enabled, safe=True)
     app.state.ccr_store = CCRStore()
     app.state.ab_monitor = ABMonitor()
     app.include_router(obs_router)

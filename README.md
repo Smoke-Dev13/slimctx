@@ -160,14 +160,20 @@ All settings can be set via environment variables with the `CONTEXTLY_` prefix o
 
 Drop-in replacement for the OpenAI chat completions endpoint. Compresses each message before forwarding, passes the response through unchanged.
 
+**Per-request control** — send `X-Contextly-Mode` to override the global setting for a single call:
+
+- `off` — skip compression for this request
+- `safe` — use the lossless chain only (no prose/log dropping)
+- *(absent / anything else)* — the configured default
+
 **Additional response headers:**
 
 - `X-Contextly-Compressed: true|false` -- whether compression ran
-- `X-Contextly-CCR-Keys: {"msg:0": "<key>", ...}` -- CCR keys per compressed message index
+- `X-Contextly-CCR-Keys: {"msg:0": "<key>", ...}` -- CCR keys per compressed message index (text content blocks use `msg:{i}:{j}`)
 
 #### `POST /v1/messages`
 
-Anthropic Messages API pass-through (no compression). Use with `--upstream anthropic`.
+Anthropic Messages API proxy **with compression** (same pipeline and `X-Contextly-Mode` control as chat/completions). Use with `--upstream anthropic`.
 
 #### `POST /v1/compress`
 
