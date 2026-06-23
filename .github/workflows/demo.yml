@@ -64,8 +64,11 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
           if [ -z "$LLM_API_KEY" ]; then
-            echo "::error::LLM_API_KEY secret is not set. Add it in Settings → Secrets → Actions."
-            exit 1
+            echo "::notice::LLM_API_KEY secret not set — skipping the live benchmark." \
+                 "Add it in Settings → Secrets → Actions to get real numbers."
+            echo "# Accuracy benchmark skipped" > /tmp/report.md
+            echo "Set the LLM_API_KEY repository secret to run the live benchmark." >> /tmp/report.md
+            exit 0
           fi
           python scripts/accuracy_benchmark.py \
             --base-url "${{ github.event.inputs.base_url }}" \
