@@ -9,6 +9,9 @@ WORKDIR /build
 COPY scripts/ ./scripts/
 COPY src/    ./src/
 COPY pyproject.toml ./
+# pyproject declares readme=README.md and license=LICENSE; both must be present
+# in the build context for hatchling to build the wheel.
+COPY LICENSE README.md ./
 
 RUN python scripts/download_encodings.py && \
     pip install --no-cache-dir --upgrade pip && \

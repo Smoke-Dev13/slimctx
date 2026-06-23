@@ -41,4 +41,5 @@ Thumbs.db
 # Docs / extras that don't belong in the image
 docs/
 *.md
-LICENSE
+# ...but pyproject requires README.md (readme) and LICENSE (license) at build time
+!README.md
