@@ -24,6 +24,8 @@ Run it:
 
 from __future__ import annotations
 
+import sys
+
 import structlog
 
 from contextly.ccr import CCRStore
@@ -161,6 +163,8 @@ async def run_gateway(
     store: CCRStore | None = None,
 ) -> None:
     """Launch the downstream MCP server and serve the gateway over stdio."""
+    # MCP stdio requires stdout to carry ONLY JSON-RPC; send all logs to stderr.
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
     store = store or CCRStore()
     router = build_router()
     params = StdioServerParameters(command=command, args=args, env=env)
