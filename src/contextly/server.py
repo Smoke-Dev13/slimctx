@@ -36,6 +36,24 @@ from contextly.routes.openai_compat import router as openai_router
 
 logger = structlog.get_logger(__name__)
 
+# Observability/probe endpoints the dashboard polls; their uvicorn access logs are
+# pure noise, so they are filtered out (real API traffic stays logged).
+_QUIET_ACCESS_PATHS: frozenset[str] = frozenset(
+    {"/stats", "/quality", "/dashboard", "/health", "/metrics"}
+)
+
+
+class _QuietAccessLogFilter(logging.Filter):
+    """Drop uvicorn access-log records for the dashboard's polling endpoints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2].split("?", 1)[0]
+            if path in _QUIET_ACCESS_PATHS:
+                return False
+        return True
+
 
 def _configure_logging(log_level: str) -> None:
     """Configure structlog with console rendering at the requested level."""
@@ -52,6 +70,11 @@ def _configure_logging(log_level: str) -> None:
         cache_logger_on_first_use=True,
     )
     logging.basicConfig(level=log_level.upper())
+    # uvicorn configures its access logger before the lifespan runs; attaching the
+    # filter here (idempotently) keeps the dashboard's 2s polling out of the logs.
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _QuietAccessLogFilter) for f in access_logger.filters):
+        access_logger.addFilter(_QuietAccessLogFilter())
 
 
 @asynccontextmanager
