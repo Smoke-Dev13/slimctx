@@ -11,12 +11,14 @@ The gateway:
   * forwards the downstream server's tools unchanged (the client sees them as-is),
   * compresses the text content of each tool result (lossless JSON tables, log
     folding, etc.),
-  * injects an ``expand`` tool so the client can recover the full original of any
-    lossily-compressed output (optionally filtered to matching records/lines).
+  * injects a ``contextly_expand`` tool so the client can recover the full
+    original of any lossily-compressed output (optionally filtered),
+  * forwards resources and prompts unchanged when the downstream exposes them, so
+    wrapping a server never hides its features.
 
 Lossless compression (JSON → columnar table) is applied with no expand marker —
 the data is all there. Lossy compression (logs, prose) stores the original in a
-CCR store and appends an ``expand("<ref>")`` hint.
+CCR store and appends a ``contextly_expand("<ref>")`` hint.
 
 Run it:
     contextly mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /data
@@ -24,9 +26,11 @@ Run it:
 
 from __future__ import annotations
 
+import base64
 import sys
 
 import structlog
+from pydantic import AnyUrl
 
 from contextly.ccr import CCRStore
 from contextly.compressors.code import CodeCompressor
@@ -41,6 +45,7 @@ try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from mcp.server import Server
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.server.stdio import stdio_server
 except ImportError as _err:  # pragma: no cover
     raise ImportError(
@@ -49,6 +54,8 @@ except ImportError as _err:  # pragma: no cover
     ) from _err
 
 logger = structlog.get_logger(__name__)
+
+_EXPAND_TOOL_NAME = "contextly_expand"
 
 
 def build_router() -> ContentRouter:
@@ -80,24 +87,36 @@ def compress_payload(text: str, router: ContentRouter, store: CCRStore) -> tuple
     saved = round(100 * (1 - result.compression_ratio))
     note = (
         f"\n\n[contextly] Output compressed ~{saved}% to save tokens. "
-        f'Call expand("{ref}") for the full original, or '
-        f'expand("{ref}", contains="...") for matching records/lines.'
+        f'Call {_EXPAND_TOOL_NAME}("{ref}") for the full original, or '
+        f'{_EXPAND_TOOL_NAME}("{ref}", contains="...") for matching records/lines.'
     )
     return result.content + note, ref
 
 
 _EXPAND_TOOL_DESCRIPTION = (
     "Expand a compressed tool output back to its original. Pass the ref shown in "
-    "a '[contextly] ... expand(\"<ref>\")' hint. Optionally pass 'contains' to get "
-    "only the matching records (JSON) or lines (logs/text)."
+    f"a '[contextly] ... {_EXPAND_TOOL_NAME}(\"<ref>\")' hint. Optionally pass "
+    "'contains' to get only the matching records (JSON) or lines (logs/text)."
 )
 
 
-def build_gateway_server(session: ClientSession, store: CCRStore, router: ContentRouter) -> Server:
-    """Build the proxy MCP server that wraps *session* (the downstream server)."""
+def build_gateway_server(
+    session: ClientSession,
+    store: CCRStore,
+    router: ContentRouter,
+    *,
+    forward_resources: bool = False,
+    forward_prompts: bool = False,
+) -> Server:
+    """Build the proxy MCP server that wraps *session* (the downstream server).
+
+    Tools are always forwarded (and their outputs compressed). Resources and
+    prompts are forwarded only when the downstream advertises those capabilities,
+    so the gateway never advertises something it cannot serve.
+    """
     server: Server = Server("contextly-gateway")
     expand_tool = types.Tool(
-        name="expand",
+        name=_EXPAND_TOOL_NAME,
         description=_EXPAND_TOOL_DESCRIPTION,
         inputSchema={
             "type": "object",
@@ -116,7 +135,7 @@ def build_gateway_server(session: ClientSession, store: CCRStore, router: Conten
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict[str, object]) -> types.CallToolResult:
-        if name == "expand":
+        if name == _EXPAND_TOOL_NAME:
             ref = str(arguments.get("ref", ""))
             contains = str(arguments.get("contains", ""))
             original = store.retrieve(ref)
@@ -135,22 +154,56 @@ def build_gateway_server(session: ClientSession, store: CCRStore, router: Conten
         new_content: list[types.ContentBlock] = []
         for block in result.content:
             if isinstance(block, types.TextContent):
-                compressed, block_ref = compress_payload(block.text, router, store)
-                if compressed != block.text:
-                    logger.info(
-                        "gateway_compressed",
-                        tool=name,
-                        ref=block_ref,
-                        saved=len(block.text) - len(compressed),
-                    )
+                compressed, _ref = compress_payload(block.text, router, store)
                 new_content.append(types.TextContent(type="text", text=compressed))
             else:
                 new_content.append(block)
+
+        # One clear savings line per tool call, visible in the client's MCP log.
+        before = sum(len(b.text) for b in result.content if isinstance(b, types.TextContent))
+        after = sum(len(b.text) for b in new_content if isinstance(b, types.TextContent))
+        saved_pct = round(100 * (1 - after / before)) if before else 0
+        logger.info(
+            "gateway_tool_result",
+            tool=name,
+            chars_before=before,
+            chars_after=after,
+            saved_pct=saved_pct,
+        )
         return types.CallToolResult(
             content=new_content,
             structuredContent=result.structuredContent,
             isError=bool(result.isError),
         )
+
+    if forward_resources:
+
+        @server.list_resources()
+        async def _list_resources() -> list[types.Resource]:
+            return list((await session.list_resources()).resources)
+
+        @server.read_resource()
+        async def _read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
+            result = await session.read_resource(uri)
+            out: list[ReadResourceContents] = []
+            for c in result.contents:
+                if isinstance(c, types.TextResourceContents):
+                    out.append(ReadResourceContents(content=c.text, mime_type=c.mimeType))
+                elif isinstance(c, types.BlobResourceContents):
+                    out.append(
+                        ReadResourceContents(content=base64.b64decode(c.blob), mime_type=c.mimeType)
+                    )
+            return out
+
+    if forward_prompts:
+
+        @server.list_prompts()
+        async def _list_prompts() -> list[types.Prompt]:
+            return list((await session.list_prompts()).prompts)
+
+        @server.get_prompt()
+        async def _get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+            return await session.get_prompt(name, arguments)
 
     return server
 
@@ -171,7 +224,19 @@ async def run_gateway(
     logger.info("gateway_starting", downstream=command, args=args)
     async with stdio_client(params) as (down_read, down_write):
         async with ClientSession(down_read, down_write) as session:
-            await session.initialize()
-            server = build_gateway_server(session, store, router)
+            init = await session.initialize()
+            caps = init.capabilities
+            logger.info(
+                "gateway_downstream_ready",
+                resources=caps.resources is not None,
+                prompts=caps.prompts is not None,
+            )
+            server = build_gateway_server(
+                session,
+                store,
+                router,
+                forward_resources=caps.resources is not None,
+                forward_prompts=caps.prompts is not None,
+            )
             async with stdio_server() as (read, write):
                 await server.run(read, write, server.create_initialization_options())
