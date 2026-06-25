@@ -32,6 +32,9 @@ First public release — a reversible compression gateway for LLM APIs.
   with compression and `X-Contextly-Mode: off|safe|default` per-request control.
 - MCP server mode (`compress_text`, `expand`, `retrieve_original`,
   `compression_stats`).
+- MCP gateway (`contextly mcp-gateway -- <server>`): proxies another MCP server
+  and compresses its tool outputs, injecting an `expand` tool for recovery —
+  the way to use Contextly with Claude Desktop's MCP servers.
 - Live `/dashboard`, Prometheus `/metrics`, `/stats`, and shadow A/B `/quality`
   with ROUGE-1 + numeric-consistency scoring.
 

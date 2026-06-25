@@ -250,6 +250,52 @@ def mcp_server() -> None:
     asyncio.run(mcp.run_stdio_async())
 
 
+@main.command(
+    name="mcp-gateway",
+    context_settings={"ignore_unknown_options": True},
+)
+@click.argument("downstream", nargs=-1, type=click.UNPROCESSED)
+def mcp_gateway(downstream: tuple[str, ...]) -> None:
+    """Proxy a downstream MCP server, compressing its tool outputs on the way back.
+
+    Put Contextly between an MCP client (Claude Desktop) and another MCP server:
+    the client sees the downstream tools unchanged, but their outputs are
+    compressed, with an injected ``expand`` tool to recover the full original.
+
+    Pass the downstream server command after ``--``.
+
+    \b
+    Example:
+        contextly mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /data
+
+    \b
+    claude_desktop_config.json:
+        {
+          "fs-compressed": {
+            "command": "contextly",
+            "args": ["mcp-gateway", "--",
+                     "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+          }
+        }
+    """
+    import asyncio
+
+    cmd = list(downstream)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        click.echo("Usage: contextly mcp-gateway -- <command> [args...]", err=True)
+        sys.exit(1)
+
+    try:
+        from contextly.mcp_gateway import run_gateway
+    except ImportError as exc:
+        click.echo(f"MCP gateway requires the 'mcp' package: {exc}", err=True)
+        sys.exit(1)
+
+    asyncio.run(run_gateway(cmd[0], cmd[1:]))
+
+
 @main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Proxy host")
 @click.option("--port", default=4000, show_default=True, type=int, help="Proxy port")

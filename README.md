@@ -373,6 +373,40 @@ contextly mcp
 
 ---
 
+## MCP Gateway (compress another server's tool outputs)
+
+`contextly mcp` exposes Contextly's *own* tools. The **gateway** instead sits between an MCP client (e.g. Claude Desktop) and any **other** MCP server, forwarding its tools unchanged while compressing the tool *outputs* — where agentic token cost actually piles up (DB rows, API responses, logs, file dumps):
+
+```
+Claude Desktop  ──▶  contextly mcp-gateway  ──▶  real MCP server (filesystem, postgres, …)
+```
+
+Lossless JSON is compressed to a columnar table; logs are folded; an `expand` tool is injected so the model can recover the full original (or just matching records/lines via `contains`) of anything compressed with loss.
+
+```bash
+contextly mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /data
+```
+
+**Claude Desktop config** (`claude_desktop_config.json`) — wrap an existing server:
+
+```json
+{
+  "mcpServers": {
+    "fs-compressed": {
+      "command": "contextly",
+      "args": ["mcp-gateway", "--",
+               "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    }
+  }
+}
+```
+
+Requires the `mcp` extra (`pip install "contextly[mcp-server]"`); the published binaries already bundle it.
+
+> Note: this compresses the **tool outputs** flowing through MCP. It cannot compress the Claude Desktop chat itself — that conversation goes straight to Anthropic and has no proxy hook.
+
+---
+
 ## Docker
 
 Pull the published image from GHCR (built and pushed by the release workflow on each version tag):

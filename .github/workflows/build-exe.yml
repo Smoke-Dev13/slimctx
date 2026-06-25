@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e ".[mcp-server]"
           pip install pyinstaller
 
       - name: Bundle tiktoken encodings (so token counting works offline)
@@ -55,6 +55,10 @@ jobs:
             --collect-data tiktoken \
             --copy-metadata contextly \
             --hidden-import contextly.cli \
+            --hidden-import contextly.mcp_gateway \
+            --hidden-import contextly.mcp_server \
+            --exclude-module mcp.cli \
+            --exclude-module typer \
             scripts/pyinstaller_entry.py
           mv "dist/${{ matrix.out }}" "dist/${{ matrix.artifact }}"
 
