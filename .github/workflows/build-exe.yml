@@ -53,6 +53,7 @@ jobs:
             --collect-all uvicorn \
             --collect-all contextly \
             --collect-data tiktoken \
+            --copy-metadata contextly \
             --hidden-import contextly.cli \
             scripts/pyinstaller_entry.py
           mv "dist/${{ matrix.out }}" "dist/${{ matrix.artifact }}"
