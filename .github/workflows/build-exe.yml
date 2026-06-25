@@ -1,0 +1,74 @@
+name: Build Executables
+
+# Builds standalone single-file binaries with PyInstaller — no Python needed to
+# run them. PyInstaller cannot cross-compile, so each OS builds on its own runner.
+#
+# Run it manually (Actions → Build Executables → Run workflow) and download the
+# binary from the run's "Artifacts" section. When triggered by a published
+# release, the binaries are also attached to that release.
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: contextly-windows-x64.exe
+            out: contextly.exe
+          - os: ubuntu-latest
+            artifact: contextly-linux-x64
+            out: contextly
+          - os: macos-latest
+            artifact: contextly-macos-arm64
+            out: contextly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project and PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Bundle tiktoken encodings (so token counting works offline)
+        shell: bash
+        run: python scripts/download_encodings.py
+
+      - name: Build single-file binary
+        shell: bash
+        run: |
+          pyinstaller --onefile --name contextly \
+            --collect-all uvicorn \
+            --collect-all contextly \
+            --collect-data tiktoken \
+            --hidden-import contextly.cli \
+            scripts/pyinstaller_entry.py
+          mv "dist/${{ matrix.out }}" "dist/${{ matrix.artifact }}"
+
+      - name: Smoke test (--version)
+        shell: bash
+        run: "dist/${{ matrix.artifact }} --version"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}
