@@ -71,16 +71,52 @@ def decode_table(table: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(zip(fields, row, strict=True)) for row in table["rows"]]
 
 
+def _is_tabular(value: Any) -> bool:
+    """True if *value* is a list of >= _MIN_RECORDS dicts with one shared schema."""
+    if not isinstance(value, list) or len(value) < _MIN_RECORDS:
+        return False
+    if not all(isinstance(r, dict) for r in value):
+        return False
+    key_set = set(value[0].keys())
+    return bool(key_set) and all(set(r.keys()) == key_set for r in value[1:])
+
+
+def _transform(value: Any) -> tuple[Any, int]:
+    """Recursively rewrite homogeneous record arrays (even nested in objects) into
+    columnar tables. Returns (new_value, number_of_records_tabled)."""
+    if _is_tabular(value):
+        return encode_table(value), len(value)
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        total = 0
+        for k, v in value.items():
+            nv, n = _transform(v)
+            out[k] = nv
+            total += n
+        return out, total
+    if isinstance(value, list):
+        new_list: list[Any] = []
+        total = 0
+        for item in value:
+            ni, n = _transform(item)
+            new_list.append(ni)
+            total += n
+        return new_list, total
+    return value, 0
+
+
 class JsonTableCompressor(Compressor):
     """Lossless columnar encoding of homogeneous JSON object arrays.
 
-    Detection (should_apply): O(1) heuristic — a JSON array containing objects.
+    Detection (should_apply): O(1) heuristic — JSON that may contain object arrays.
 
     Compression pipeline:
-      1. Parse JSON; bail to passthrough unless it is a list of >= 2 dicts.
-      2. Require an identical key set across all records (keeps it reversible).
-      3. Emit {"_format","fields","rows"} with compact separators.
-      4. Use the result only if it is actually shorter than the input.
+      1. Parse JSON; bail to passthrough on parse error.
+      2. Recursively rewrite every homogeneous array of dicts — top-level *or
+         nested inside an object* (e.g. a paginated API's
+         {"list": [...], "pageInfo": ...}) — into a {"_format","fields","rows"}
+         table, keeping the surrounding structure intact.
+      3. Bail if nothing was tabled or the result is not actually shorter.
     """
 
     @property
@@ -88,12 +124,12 @@ class JsonTableCompressor(Compressor):
         return "json_table"
 
     def should_apply(self, content: str, query: str = "") -> bool:
-        """Return True if content looks like a JSON array of objects."""
+        """Return True if content is JSON that may hold an array of objects."""
         stripped = content.lstrip()
-        return stripped.startswith("[") and "{" in stripped[:500]
+        return (stripped.startswith("[") or stripped.startswith("{")) and "{" in stripped[:2000]
 
     def compress(self, content: str, query: str = "") -> CompressResult:
-        """Rewrite a homogeneous JSON array into a lossless columnar table."""
+        """Rewrite homogeneous JSON record arrays into lossless columnar tables."""
         original_length = len(content)
 
         try:
@@ -101,28 +137,18 @@ class JsonTableCompressor(Compressor):
         except (json.JSONDecodeError, ValueError):
             return _make_passthrough(content, self.name)
 
-        if not isinstance(data, list) or len(data) < _MIN_RECORDS:
-            return _make_passthrough(content, self.name)
-        if not all(isinstance(r, dict) for r in data):
-            return _make_passthrough(content, self.name)
-
-        records: list[dict[str, Any]] = data
-        key_set = set(records[0].keys())
-        if not key_set or any(set(r.keys()) != key_set for r in records[1:]):
-            # Differing schemas would not round-trip cleanly — leave it alone.
+        transformed, n_records = _transform(data)
+        if n_records == 0:
             return _make_passthrough(content, self.name)
 
-        encoded = encode_table(records)
-        compressed_content = json.dumps(encoded, separators=(",", ":"), ensure_ascii=False)
+        compressed_content = json.dumps(transformed, separators=(",", ":"), ensure_ascii=False)
         compressed_length = len(compressed_content)
-
         if compressed_length >= original_length:
             return _make_passthrough(content, self.name)
 
         logger.info(
             "json_table_compressed",
-            records=len(records),
-            fields=len(key_set),
+            records=n_records,
             ratio=round(compressed_length / original_length, 3),
         )
 
@@ -132,8 +158,7 @@ class JsonTableCompressor(Compressor):
             compressed_length=compressed_length,
             compressor_name=self.name,
             metadata={
-                "records": len(records),
-                "fields": len(key_set),
+                "records": n_records,
                 "lossless": True,
             },
         )

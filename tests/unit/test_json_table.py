@@ -69,6 +69,27 @@ def test_reduces_size() -> None:
 # ── Fallbacks ───────────────────────────────────────────────────────────────────
 
 
+def test_nested_records_array_is_compressed() -> None:
+    # Paginated-API style: records wrapped in an object {"list": [...], "pageInfo": {...}}.
+    payload = {"list": _RECORDS, "pageInfo": {"totalRows": len(_RECORDS), "page": 1}}
+    result = _compress(payload)
+    assert result.compressor_name == "json_table"
+    assert result.compressed_length < result.original_length
+    out = json.loads(result.content)
+    # The surrounding object is preserved; the list became a table.
+    assert out["pageInfo"] == {"totalRows": len(_RECORDS), "page": 1}
+    assert decode_table(out["list"]) == _RECORDS
+
+
+def test_should_apply_on_json_object() -> None:
+    assert JsonTableCompressor().should_apply('{"list": [{"a": 1}, {"a": 2}]}') is True
+
+
+def test_object_without_record_arrays_passes_through() -> None:
+    result = _compress({"a": 1, "b": {"c": 2}})
+    assert result.content == json.dumps({"a": 1, "b": {"c": 2}})
+
+
 def test_heterogeneous_schema_passes_through() -> None:
     records = [{"a": 1, "b": 2}, {"a": 1, "c": 3}]  # differing key sets
     result = _compress(records)

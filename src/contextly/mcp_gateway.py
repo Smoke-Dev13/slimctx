@@ -170,6 +170,13 @@ def build_gateway_server(
             chars_after=after,
             saved_pct=saved_pct,
         )
+        # Diagnostic: when a sizeable output did not compress, log its head so the
+        # output's shape can be inspected (and a compressor added if worthwhile).
+        if before > 500 and after >= before:
+            head = next(
+                (b.text[:200] for b in result.content if isinstance(b, types.TextContent)), ""
+            )
+            logger.info("gateway_uncompressed_sample", tool=name, chars=before, head=head)
         return types.CallToolResult(
             content=new_content,
             structuredContent=result.structuredContent,
