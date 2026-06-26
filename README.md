@@ -410,6 +410,8 @@ Requires the `mcp` extra (`pip install "contextly[mcp-server]"`); the published 
          "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
 ```
 
+**Wrapping several servers → one dashboard.** Claude Desktop launches one gateway process per wrapped server, and they all default to the same dashboard port — only one can bind it. So every gateway records into a *shared* SQLite file (`~/.contextly/gateway_stats.db`, override with `--stats-path`), and the single dashboard that wins the port shows the **combined** savings of all of them, tagged by a `server` label derived from each downstream URL (override with `--name`). Just wrap each server the same way; no extra config needed to see them together.
+
 > Note: this compresses the **tool outputs** flowing through MCP. It cannot compress the Claude Desktop chat itself — that conversation goes straight to Anthropic and has no proxy hook.
 
 ---

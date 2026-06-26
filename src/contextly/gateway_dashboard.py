@@ -3,7 +3,7 @@
 The gateway runs as a stdio process whose stdout is reserved for JSON-RPC, so it
 cannot reuse the proxy's FastAPI ``/dashboard``. Instead this module spins up a
 tiny stdlib HTTP server on a background daemon thread that serves a self-updating
-page polling the gateway's :class:`~contextly.gateway_stats.GatewayStats`.
+page polling the gateway's :class:`~contextly.gateway_stats.StatsRecorder`.
 
 Open it in a browser while Claude Desktop (or any MCP client) is connected to see
 per-tool compression savings update live. It is intentionally built on
@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import structlog
 
-from contextly.gateway_stats import GatewayStats
+from contextly.gateway_stats import StatsRecorder
 
 logger = structlog.get_logger(__name__)
 
@@ -63,7 +63,8 @@ _DASHBOARD_HTML = """<!doctype html>
 <body>
 <header>
   <h1>Context<span>ly</span> gateway — live savings</h1>
-  <div class="sub">Compressed MCP tool outputs · polling <code>/stats</code> every 2s</div>
+  <div class="sub">Compressed MCP tool outputs across all wrapped servers ·
+    polling <code>/stats</code> every 2s</div>
 </header>
 <div class="wrap">
   <div class="grid">
@@ -134,7 +135,7 @@ tick(); setInterval(tick, 2000);
 class _Handler(BaseHTTPRequestHandler):
     """Serves the dashboard page and a JSON stats snapshot.
 
-    The owning :class:`GatewayStats` is attached to the server instance so each
+    The owning stats recorder is attached to the server instance so each
     request can read the live snapshot without a module global.
     """
 
@@ -155,7 +156,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path in ("/", "/dashboard"):
             self._send(200, _DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/stats":
-            stats: GatewayStats = self.server.gateway_stats  # type: ignore[attr-defined]
+            stats: StatsRecorder = self.server.gateway_stats  # type: ignore[attr-defined]
             body = json.dumps(stats.snapshot()).encode("utf-8")
             self._send(200, body, "application/json")
         elif path == "/favicon.ico":
@@ -164,7 +165,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
 
-def start_dashboard(stats: GatewayStats, host: str, port: int) -> ThreadingHTTPServer | None:
+def start_dashboard(stats: StatsRecorder, host: str, port: int) -> ThreadingHTTPServer | None:
     """Start the dashboard HTTP server on a background daemon thread.
 
     Returns the server (so the caller may close it) or ``None`` if the port could

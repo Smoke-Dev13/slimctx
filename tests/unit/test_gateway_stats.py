@@ -7,8 +7,8 @@ import json
 import pytest
 
 from contextly.ccr import CCRStore
-from contextly.gateway_stats import GatewayStats
-from contextly.mcp_gateway import build_gateway_server, build_router
+from contextly.gateway_stats import GatewayStats, SQLiteStatsStore
+from contextly.mcp_gateway import build_gateway_server, build_router, derive_server_name
 
 _JSON = json.dumps([{"id": i, "city": "Tbilisi", "plan": "gold"} for i in range(60)])
 
@@ -44,6 +44,62 @@ def test_ratio_is_after_over_before() -> None:
     stats = GatewayStats()
     stats.record("t", 1000, 250)
     assert stats.snapshot()["compression_ratio_mean"] == 0.25
+
+
+# ── SQLiteStatsStore (shared, multi-process) ────────────────────────────────────
+
+
+def test_sqlite_store_records_and_aggregates(tmp_path: object) -> None:
+    db = f"{tmp_path}/stats.db"  # type: ignore[str-bytes-safe]
+    store = SQLiteStatsStore(db, server="nocodb")
+    store.record("queryRecords", 10000, 6400)
+    store.record("queryRecords", 200, 200)  # no savings
+    snap = store.snapshot()
+
+    assert snap["tool_calls_total"] == 2
+    assert snap["tool_calls_compressed"] == 1
+    assert snap["chars_saved_total"] == 3600
+    assert snap["by_tool"]["nocodb · queryRecords"]["calls"] == 2
+    assert snap["by_tool"]["nocodb · queryRecords"]["server"] == "nocodb"
+
+
+def test_sqlite_store_is_shared_across_instances(tmp_path: object) -> None:
+    # The whole point: two gateway processes (two stores) → one shared file →
+    # the dashboard reading either store sees the union, tagged per server.
+    db = f"{tmp_path}/shared.db"  # type: ignore[str-bytes-safe]
+    nocodb = SQLiteStatsStore(db, server="nocodb")
+    outline = SQLiteStatsStore(db, server="outline")
+
+    nocodb.record("queryRecords", 1000, 600)
+    outline.record("search", 500, 300)
+
+    snap = outline.snapshot()  # read from the *other* instance
+    assert snap["tool_calls_total"] == 2
+    assert snap["chars_saved_total"] == 600  # 400 + 200
+    assert "nocodb · queryRecords" in snap["by_tool"]
+    assert "outline · search" in snap["by_tool"]
+
+
+def test_sqlite_store_persists_across_reopen(tmp_path: object) -> None:
+    db = f"{tmp_path}/persist.db"  # type: ignore[str-bytes-safe]
+    SQLiteStatsStore(db, server="s").record("t", 1000, 400)
+    reopened = SQLiteStatsStore(db, server="s")  # fresh instance, same file
+    assert reopened.snapshot()["chars_saved_total"] == 600
+
+
+# ── derive_server_name ──────────────────────────────────────────────────────────
+
+
+def test_derive_server_name_from_url() -> None:
+    name = derive_server_name(
+        "mcp-remote.cmd", ["https://nocodb.westdev.duckdns.org/mcp/x", "--header", "tok"]
+    )
+    assert name == "nocodb"
+
+
+def test_derive_server_name_falls_back_to_command_basename() -> None:
+    assert derive_server_name("npx", ["-y", "@modelcontextprotocol/server-filesystem"]) == "npx"
+    assert derive_server_name("server.exe", []) == "server"
 
 
 # ── Wired through a real gateway tool call ──────────────────────────────────────

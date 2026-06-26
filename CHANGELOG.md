@@ -12,6 +12,17 @@ All notable changes to Contextly are documented here. This project adheres to
   and it cannot reuse the proxy's `/dashboard`. Shows total tokens/characters
   saved, average compression, and a live per-tool breakdown. Configure with
   `--dashboard-port` / `--dashboard-host`; disable with `--dashboard-port 0`.
+- **Shared multi-server stats.** Gateways now record savings into a shared
+  SQLite file (`~/.contextly/gateway_stats.db`, override `--stats-path`) tagged
+  by a per-server label (derived from the downstream URL, override `--name`).
+  When several servers are wrapped at once — each its own gateway process
+  contending for the same dashboard port — the one dashboard that binds the port
+  reports the **combined** savings of all of them instead of just its own.
+
+### Fixed
+- Gateway compression is now strictly best-effort: a compressor fault on a tool
+  output falls back to the raw text and logs `gateway_compress_failed`, instead
+  of propagating out and making the MCP client report "Failed to call tool".
 
 ## [0.1.0] - 2026-06-22
 
