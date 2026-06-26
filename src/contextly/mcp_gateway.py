@@ -39,6 +39,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.expand import filter_original
+from contextly.gateway_stats import GatewayStats
 
 try:
     import mcp.types as types
@@ -107,12 +108,14 @@ def build_gateway_server(
     *,
     forward_resources: bool = False,
     forward_prompts: bool = False,
+    stats: GatewayStats | None = None,
 ) -> Server:
     """Build the proxy MCP server that wraps *session* (the downstream server).
 
     Tools are always forwarded (and their outputs compressed). Resources and
     prompts are forwarded only when the downstream advertises those capabilities,
-    so the gateway never advertises something it cannot serve.
+    so the gateway never advertises something it cannot serve. When *stats* is
+    given, each tool call's before/after size is recorded for the live dashboard.
     """
     server: Server = Server("contextly-gateway")
     expand_tool = types.Tool(
@@ -163,6 +166,8 @@ def build_gateway_server(
         before = sum(len(b.text) for b in result.content if isinstance(b, types.TextContent))
         after = sum(len(b.text) for b in new_content if isinstance(b, types.TextContent))
         saved_pct = round(100 * (1 - after / before)) if before else 0
+        if stats is not None:
+            stats.record(name, before, after)
         logger.info(
             "gateway_tool_result",
             tool=name,
@@ -221,12 +226,24 @@ async def run_gateway(
     *,
     env: dict[str, str] | None = None,
     store: CCRStore | None = None,
+    dashboard_host: str = "127.0.0.1",
+    dashboard_port: int | None = 4100,
 ) -> None:
-    """Launch the downstream MCP server and serve the gateway over stdio."""
+    """Launch the downstream MCP server and serve the gateway over stdio.
+
+    When *dashboard_port* is set (the default), a live savings dashboard is served
+    on a background thread at ``http://<dashboard_host>:<dashboard_port>/dashboard``.
+    Pass ``dashboard_port=None`` (CLI: ``--dashboard-port 0``) to disable it.
+    """
     # MCP stdio requires stdout to carry ONLY JSON-RPC; send all logs to stderr.
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
     store = store or CCRStore()
     router = build_router()
+    stats = GatewayStats()
+    if dashboard_port:
+        from contextly.gateway_dashboard import start_dashboard
+
+        start_dashboard(stats, dashboard_host, dashboard_port)
     params = StdioServerParameters(command=command, args=args, env=env)
     logger.info("gateway_starting", downstream=command, args=args)
     async with stdio_client(params) as (down_read, down_write):
@@ -244,6 +261,7 @@ async def run_gateway(
                 router,
                 forward_resources=caps.resources is not None,
                 forward_prompts=caps.prompts is not None,
+                stats=stats,
             )
             async with stdio_server() as (read, write):
                 await server.run(read, write, server.create_initialization_options())
