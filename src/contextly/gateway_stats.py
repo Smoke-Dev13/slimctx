@@ -65,9 +65,7 @@ class GatewayStats:
         with self._lock:
             chars_saved = self._chars_before - self._chars_after
             ratio = (
-                round(self._chars_after / self._chars_before, 4)
-                if self._chars_before > 0
-                else 1.0
+                round(self._chars_after / self._chars_before, 4) if self._chars_before > 0 else 1.0
             )
             by_tool = {
                 name: {
