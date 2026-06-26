@@ -256,16 +256,18 @@ def mcp_server() -> None:
 )
 @click.option(
     "--dashboard-port",
-    default=4100,
+    default=0,
     show_default=True,
     type=int,
-    help="Serve a live savings dashboard on this port (0 disables it)",
+    help="Also serve a standalone gateway dashboard on this port (0 = off). "
+    "Normally unnecessary — the proxy's :4000 dashboard already shows gateway "
+    "savings. Only one process can bind it, so avoid when wrapping several servers.",
 )
 @click.option(
     "--dashboard-host",
     default="127.0.0.1",
     show_default=True,
-    help="Bind host for the savings dashboard",
+    help="Bind host for the standalone gateway dashboard (when --dashboard-port is set)",
 )
 @click.option(
     "--name",
@@ -293,10 +295,13 @@ def mcp_gateway(
     the client sees the downstream tools unchanged, but their outputs are
     compressed, with an injected ``expand`` tool to recover the full original.
 
-    While connected, open http://127.0.0.1:4100/dashboard to watch per-tool
-    savings update live (change the port with --dashboard-port, 0 to disable).
-    Wrapping several servers? They share one stats file, so that single dashboard
-    shows all of them together (label each with --name; relocate with --stats-path).
+    Savings are recorded into a shared stats file (one per machine), so the
+    proxy's single dashboard at http://127.0.0.1:4000/dashboard shows this
+    server's tool-output savings next to the proxy's own stats — run
+    ``contextly proxy`` once and open that one page. Wrapping several servers? They
+    all write to the same file and appear together there (label each with --name;
+    relocate with --stats-path). The gateways never bind a port, so they can't
+    knock each other off the dashboard.
 
     Pass the downstream server command after ``--``.
 
