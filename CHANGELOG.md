@@ -6,23 +6,19 @@ All notable changes to Contextly are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
-- **Live MCP gateway dashboard.** The gateway now serves its own self-updating
-  savings dashboard on a background thread (default
-  <http://127.0.0.1:4100/dashboard>), since its stdout is reserved for JSON-RPC
-  and it cannot reuse the proxy's `/dashboard`. Shows total tokens/characters
-  saved, average compression, and a live per-tool breakdown. Configure with
-  `--dashboard-port` / `--dashboard-host`; disable with `--dashboard-port 0`.
-- **One dashboard across every wrapped server.** Each `mcp-gateway` instance now
-  records savings into a shared SQLite file (`~/.contextly/gateway_stats.db`,
-  override `--stats-path`) tagged by a per-server label (override `--name`,
-  default derived from the downstream URL). Because Claude Desktop runs one
-  gateway process per wrapped server — and only one can bind the dashboard port —
-  the dashboard now reports the **combined** totals of all of them, each tool
-  shown as `<server> · <tool>`.
-- **Gateway savings on the proxy dashboard too.** The proxy's `/dashboard` (and a
-  new `/gateway-stats` endpoint) reads that same shared file, so whichever
-  dashboard you open — proxy `:4000` or gateway `:4100` — shows the gateway's
-  tool-output compression. Path configurable via `CONTEXTLY_GATEWAY_STATS_PATH`.
+- **One dashboard for the proxy and every wrapped MCP server.** Each
+  `mcp-gateway` instance records its savings into a shared SQLite file
+  (`~/.contextly/gateway_stats.db`, override `--stats-path`) tagged by a
+  per-server label (override `--name`, default derived from the downstream URL),
+  and the proxy's `/dashboard` (plus a new `/gateway-stats` endpoint,
+  `CONTEXTLY_GATEWAY_STATS_PATH`) reads it. A single page at
+  <http://127.0.0.1:4000/dashboard> now shows the gateway's tool-output savings
+  (each tool as `<server> · <tool>`, combined across all wrapped servers) next to
+  the proxy's own per-compressor quality.
+- **Standalone gateway dashboard, opt-in.** For the case where no proxy runs, the
+  gateway can still serve its own dashboard via `--dashboard-port <n>`. It is now
+  **off by default**: gateways only write to the shared file and never bind a
+  port, so multiple wrapped servers can't knock each other off the dashboard.
 
 ### Fixed
 - A compressor fault on a tool output no longer breaks the call: the gateway

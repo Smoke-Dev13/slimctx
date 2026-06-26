@@ -403,14 +403,16 @@ contextly mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /data
 
 Requires the `mcp` extra (`pip install "contextly[mcp-server]"`); the published binaries already bundle it.
 
-**Live gateway dashboard.** The gateway has no FastAPI app of its own (its stdout is reserved for JSON-RPC), so it serves a small dashboard on a background thread. While Claude Desktop is connected, open <http://127.0.0.1:4100/dashboard> to watch per-tool savings update live — total tokens/characters saved, average compression, and a per-tool breakdown. Change the port with `--dashboard-port` (and `--dashboard-host`), or pass `--dashboard-port 0` to disable it:
+**One dashboard for everything.** Each gateway records its savings into a shared file (`~/.contextly/gateway_stats.db`; `--stats-path` to change, `--name` to label a server), and the **proxy's** dashboard reads it — so a single page shows the gateway's tool-output savings (each tool as `<server> · <tool>`) next to the proxy's own per-compressor quality. Run the proxy once and open that one URL:
 
-```json
-"args": ["mcp-gateway", "--dashboard-port", "4100", "--",
-         "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+```bash
+contextly proxy            # serves the dashboard
+# → open http://127.0.0.1:4000/dashboard
 ```
 
-**One dashboard for every server.** Wrapping several servers means several gateway processes, and only one can bind the dashboard port. So each instance records into a shared file (`~/.contextly/gateway_stats.db`; `--stats-path` to change, `--name` to label a server) and the dashboard shows the **combined** totals, each tool as `<server> · <tool>`. The proxy's own dashboard reads the same file, so opening either `:4000` (proxy) or `:4100` (gateway) shows the gateway's savings — you don't have to remember which is which.
+Wrapping several servers spawns several gateway processes, but they only *write* to the shared file — they never bind a port, so they can't knock each other off the dashboard; all of them appear together on `:4000`.
+
+If you don't run the proxy at all, the gateway can serve its own standalone dashboard instead — opt in with `--dashboard-port <n>` (off by default). Use it only when wrapping a single server, since just one process can bind the port.
 
 **Wrapping several servers → one dashboard.** Claude Desktop launches one gateway process per wrapped server, and they all default to the same dashboard port — only one can bind it. So every gateway records into a *shared* SQLite file (`~/.contextly/gateway_stats.db`, override with `--stats-path`), and the single dashboard that wins the port shows the **combined** savings of all of them, tagged by a `server` label derived from each downstream URL (override with `--name`). Just wrap each server the same way; no extra config needed to see them together.
 

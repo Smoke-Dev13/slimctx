@@ -251,20 +251,23 @@ async def run_gateway(
     env: dict[str, str] | None = None,
     store: CCRStore | None = None,
     dashboard_host: str = "127.0.0.1",
-    dashboard_port: int | None = 4100,
+    dashboard_port: int | None = None,
     server_name: str = "",
     stats_path: str | None = None,
     stats: StatsRecorder | None = None,
 ) -> None:
     """Launch the downstream MCP server and serve the gateway over stdio.
 
-    When *dashboard_port* is set (the default), a live savings dashboard is served
-    on a background thread at ``http://<dashboard_host>:<dashboard_port>/dashboard``.
-    Pass ``dashboard_port=None`` (CLI: ``--dashboard-port 0``) to disable it.
+    Savings are always recorded into a shared SQLite file (*stats_path*, default
+    ``~/.contextly/gateway_stats.db``) under *server_name*. The single dashboard is
+    the proxy's ``/dashboard`` (default ``http://127.0.0.1:4000``), which reads that
+    file — so there is one pane for every wrapped server *and* the proxy's own
+    stats, and the gateway processes never compete for a port.
 
-    Savings are recorded into a shared SQLite file (*stats_path*, default
-    ``~/.contextly/gateway_stats.db``) under *server_name*, so when several gateway
-    instances run at once the single dashboard shows their combined totals.
+    *dashboard_port* is opt-in (off by default) for the case where no proxy runs:
+    set it (CLI: ``--dashboard-port <n>``) to also serve the standalone gateway
+    dashboard on a background thread. Avoid it when wrapping multiple servers —
+    only one process can bind the port.
     """
     # MCP stdio requires stdout to carry ONLY JSON-RPC; send all logs to stderr.
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
