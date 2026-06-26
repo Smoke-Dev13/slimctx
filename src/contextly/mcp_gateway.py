@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import base64
 import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 import structlog
 from pydantic import AnyUrl
@@ -39,7 +41,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.expand import filter_original
-from contextly.gateway_stats import GatewayStats
+from contextly.gateway_stats import SQLiteStatsStore, StatsRecorder, default_stats_path
 
 try:
     import mcp.types as types
@@ -108,7 +110,7 @@ def build_gateway_server(
     *,
     forward_resources: bool = False,
     forward_prompts: bool = False,
-    stats: GatewayStats | None = None,
+    stats: StatsRecorder | None = None,
 ) -> Server:
     """Build the proxy MCP server that wraps *session* (the downstream server).
 
@@ -157,7 +159,13 @@ def build_gateway_server(
         new_content: list[types.ContentBlock] = []
         for block in result.content:
             if isinstance(block, types.TextContent):
-                compressed, _ref = compress_payload(block.text, router, store)
+                # Compression is best-effort: a compressor fault must never turn a
+                # working tool into a failing one, so fall back to the raw text.
+                try:
+                    compressed, _ref = compress_payload(block.text, router, store)
+                except Exception:
+                    logger.warning("gateway_compress_failed", tool=name, exc_info=True)
+                    compressed = block.text
                 new_content.append(types.TextContent(type="text", text=compressed))
             else:
                 new_content.append(block)
@@ -220,6 +228,22 @@ def build_gateway_server(
     return server
 
 
+def derive_server_name(command: str, args: list[str]) -> str:
+    """Best-effort short label for the wrapped server, for the dashboard.
+
+    Prefers the first hostname's leading label among the downstream tokens (so
+    ``mcp-remote https://nocodb.example/...`` → ``nocodb``); otherwise falls back
+    to the command's basename without extension.
+    """
+    for token in [command, *args]:
+        if "://" in token:
+            host = urlparse(token).hostname or ""
+            if host:
+                return host.split(".")[0]
+    base = Path(command).name
+    return base.rsplit(".", 1)[0] if "." in base else base
+
+
 async def run_gateway(
     command: str,
     args: list[str],
@@ -228,24 +252,32 @@ async def run_gateway(
     store: CCRStore | None = None,
     dashboard_host: str = "127.0.0.1",
     dashboard_port: int | None = 4100,
+    server_name: str = "",
+    stats_path: str | None = None,
+    stats: StatsRecorder | None = None,
 ) -> None:
     """Launch the downstream MCP server and serve the gateway over stdio.
 
     When *dashboard_port* is set (the default), a live savings dashboard is served
     on a background thread at ``http://<dashboard_host>:<dashboard_port>/dashboard``.
     Pass ``dashboard_port=None`` (CLI: ``--dashboard-port 0``) to disable it.
+
+    Savings are recorded into a shared SQLite file (*stats_path*, default
+    ``~/.contextly/gateway_stats.db``) under *server_name*, so when several gateway
+    instances run at once the single dashboard shows their combined totals.
     """
     # MCP stdio requires stdout to carry ONLY JSON-RPC; send all logs to stderr.
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
     store = store or CCRStore()
     router = build_router()
-    stats = GatewayStats()
+    server_name = server_name or derive_server_name(command, args)
+    stats = stats or SQLiteStatsStore(stats_path or default_stats_path(), server_name)
     if dashboard_port:
         from contextly.gateway_dashboard import start_dashboard
 
         start_dashboard(stats, dashboard_host, dashboard_port)
     params = StdioServerParameters(command=command, args=args, env=env)
-    logger.info("gateway_starting", downstream=command, args=args)
+    logger.info("gateway_starting", downstream=command, args=args, server=server_name)
     async with stdio_client(params) as (down_read, down_write):
         async with ClientSession(down_read, down_write) as session:
             init = await session.initialize()

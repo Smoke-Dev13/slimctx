@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from contextly.dashboard import DASHBOARD_HTML
-from contextly.deps import ABMonitorDep, ConfigDep
+from contextly.deps import ABMonitorDep, ConfigDep, GatewayStatsDep
 from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
 
 logger = structlog.get_logger(__name__)
@@ -67,6 +67,23 @@ async def stats(ab_monitor: ABMonitorDep) -> JSONResponse:
         JSON with request and compression aggregate stats.
     """
     return JSONResponse(ab_monitor.stats())
+
+
+@router.get("/gateway-stats")
+async def gateway_stats(gateway: GatewayStatsDep) -> JSONResponse:
+    """Aggregate savings recorded by the MCP gateway(s) sharing the stats file.
+
+    Lets the proxy dashboard surface gateway tool-output compression even though
+    the gateway is a separate stdio process. Returns neutral zeros when no gateway
+    has run yet.
+
+    Args:
+        gateway: Read-only view of the shared SQLite gateway stats store.
+
+    Returns:
+        JSON with combined gateway totals and a per-(server, tool) breakdown.
+    """
+    return JSONResponse(gateway.snapshot())
 
 
 @router.get("/metrics")

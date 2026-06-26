@@ -267,8 +267,26 @@ def mcp_server() -> None:
     show_default=True,
     help="Bind host for the savings dashboard",
 )
+@click.option(
+    "--name",
+    "server_name",
+    default="",
+    help="Label for this server in the dashboard (default: derived from the downstream URL)",
+)
+@click.option(
+    "--stats-path",
+    default="",
+    help="Shared savings DB path (default: ~/.contextly/gateway_stats.db). "
+    "Keep identical across wrapped servers to aggregate them in one dashboard.",
+)
 @click.argument("downstream", nargs=-1, type=click.UNPROCESSED)
-def mcp_gateway(dashboard_port: int, dashboard_host: str, downstream: tuple[str, ...]) -> None:
+def mcp_gateway(
+    dashboard_port: int,
+    dashboard_host: str,
+    server_name: str,
+    stats_path: str,
+    downstream: tuple[str, ...],
+) -> None:
     """Proxy a downstream MCP server, compressing its tool outputs on the way back.
 
     Put Contextly between an MCP client (Claude Desktop) and another MCP server:
@@ -277,6 +295,8 @@ def mcp_gateway(dashboard_port: int, dashboard_host: str, downstream: tuple[str,
 
     While connected, open http://127.0.0.1:4100/dashboard to watch per-tool
     savings update live (change the port with --dashboard-port, 0 to disable).
+    Wrapping several servers? They share one stats file, so that single dashboard
+    shows all of them together (label each with --name; relocate with --stats-path).
 
     Pass the downstream server command after ``--``.
 
@@ -315,6 +335,8 @@ def mcp_gateway(dashboard_port: int, dashboard_host: str, downstream: tuple[str,
             cmd[1:],
             dashboard_host=dashboard_host,
             dashboard_port=dashboard_port or None,
+            server_name=server_name,
+            stats_path=stats_path or None,
         )
     )
 

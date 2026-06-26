@@ -69,6 +69,12 @@ class Config(BaseSettings):
     # ── A/B Quality ─────────────────────────────────────────────────────────
     ab_sample_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
 
+    # ── Gateway stats bridge ────────────────────────────────────────────────
+    # The proxy dashboard also surfaces the MCP gateway's savings by reading the
+    # shared stats file the gateway writes (so one dashboard shows both). Empty
+    # means the default ~/.contextly/gateway_stats.db used by ``mcp-gateway``.
+    gateway_stats_path: str = ""
+
     def resolved_upstream_url(self) -> str:
         """Return the effective upstream base URL (no trailing slash).
 

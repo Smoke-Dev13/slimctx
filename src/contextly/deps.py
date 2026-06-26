@@ -16,6 +16,7 @@ from contextly.ab_monitor import ABMonitor
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.gateway_stats import SQLiteStatsStore
 
 
 def _get_config(request: Request) -> Config:
@@ -42,9 +43,14 @@ def _get_ab_monitor(request: Request) -> ABMonitor:
     return cast(ABMonitor, request.app.state.ab_monitor)
 
 
+def _get_gateway_stats(request: Request) -> SQLiteStatsStore:
+    return cast(SQLiteStatsStore, request.app.state.gateway_stats)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
 SafeContentRouterDep = Annotated[ContentRouter, Depends(_get_safe_content_router)]
 CCRDep = Annotated[CCRStore, Depends(_get_ccr_store)]
 ABMonitorDep = Annotated[ABMonitor, Depends(_get_ab_monitor)]
+GatewayStatsDep = Annotated[SQLiteStatsStore, Depends(_get_gateway_stats)]

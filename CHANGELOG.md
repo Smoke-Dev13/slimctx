@@ -12,6 +12,33 @@ All notable changes to Contextly are documented here. This project adheres to
   and it cannot reuse the proxy's `/dashboard`. Shows total tokens/characters
   saved, average compression, and a live per-tool breakdown. Configure with
   `--dashboard-port` / `--dashboard-host`; disable with `--dashboard-port 0`.
+- **One dashboard across every wrapped server.** Each `mcp-gateway` instance now
+  records savings into a shared SQLite file (`~/.contextly/gateway_stats.db`,
+  override `--stats-path`) tagged by a per-server label (override `--name`,
+  default derived from the downstream URL). Because Claude Desktop runs one
+  gateway process per wrapped server — and only one can bind the dashboard port —
+  the dashboard now reports the **combined** totals of all of them, each tool
+  shown as `<server> · <tool>`.
+- **Gateway savings on the proxy dashboard too.** The proxy's `/dashboard` (and a
+  new `/gateway-stats` endpoint) reads that same shared file, so whichever
+  dashboard you open — proxy `:4000` or gateway `:4100` — shows the gateway's
+  tool-output compression. Path configurable via `CONTEXTLY_GATEWAY_STATS_PATH`.
+
+### Fixed
+- A compressor fault on a tool output no longer breaks the call: the gateway
+  falls back to the raw text and logs `gateway_compress_failed`, instead of the
+  MCP client reporting "Failed to call tool".
+- **Shared multi-server stats.** Gateways now record savings into a shared
+  SQLite file (`~/.contextly/gateway_stats.db`, override `--stats-path`) tagged
+  by a per-server label (derived from the downstream URL, override `--name`).
+  When several servers are wrapped at once — each its own gateway process
+  contending for the same dashboard port — the one dashboard that binds the port
+  reports the **combined** savings of all of them instead of just its own.
+
+### Fixed
+- Gateway compression is now strictly best-effort: a compressor fault on a tool
+  output falls back to the raw text and logs `gateway_compress_failed`, instead
+  of propagating out and making the MCP client report "Failed to call tool".
 
 ## [0.1.0] - 2026-06-22
 
