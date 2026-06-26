@@ -46,6 +46,11 @@ class StatsRecorder(Protocol):
     def snapshot(self) -> dict[str, Any]: ...
 
 
+def default_stats_path() -> str:
+    """Shared stats file used by every gateway instance (and read by the proxy)."""
+    return str(Path.home() / ".contextly" / "gateway_stats.db")
+
+
 @dataclass
 class _ToolTotals:
     """Running totals for a single downstream tool."""

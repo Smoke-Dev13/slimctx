@@ -50,7 +50,8 @@ DASHBOARD_HTML = """<!doctype html>
 <body>
 <header>
   <h1>Context<span>ly</span> — live savings</h1>
-  <div class="sub">Polling <code>/stats</code> and <code>/quality</code> every 2s
+  <div class="sub">Polling <code>/stats</code>, <code>/quality</code> and
+    <code>/gateway-stats</code> every 2s
     · price <input id="price" type="number" step="0.05" value="0.50" /> $/1M input tokens</div>
 </header>
 <div class="wrap">
@@ -80,6 +81,25 @@ DASHBOARD_HTML = """<!doctype html>
     </table>
   </div>
 
+  <div class="section">
+    <h2>MCP gateway — tool-output savings</h2>
+    <div class="grid" style="margin-bottom:6px">
+      <div class="card"><div class="label">Gateway tokens saved</div>
+        <div class="value green" id="g_tokens">—</div></div>
+      <div class="card"><div class="label">Gateway tool calls</div>
+        <div class="value" id="g_calls">—</div></div>
+      <div class="card"><div class="label">Gateway avg compression</div>
+        <div class="value blue" id="g_ratio">—</div></div>
+    </div>
+    <table id="bytool">
+      <thead><tr><th>Server · tool</th><th class="num">Calls</th>
+        <th class="num">Before</th><th class="num">After</th>
+        <th class="num">Saved</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">No gateway tool calls recorded yet —
+        run a tool through <code>contextly mcp-gateway</code>.</td></tr></tbody>
+    </table>
+  </div>
+
   <div class="row"><span class="dot" id="live"></span>
     <span class="muted" id="status">connecting…</span></div>
 </div>
@@ -89,12 +109,30 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => n.toLocaleString();
 function pct(x) { return (x*100).toFixed(1) + '%'; }
 
+function renderGateway(g) {
+  $('g_tokens').textContent = fmt(g.tokens_saved_estimate_total || 0);
+  $('g_calls').textContent = fmt(g.tool_calls_total || 0);
+  const gsaved = 1 - (g.compression_ratio_mean ?? 1);
+  $('g_ratio').innerHTML = pct(Math.max(0, gsaved)) + '<span class="unit">smaller</span>';
+  const tbody = $('bytool').querySelector('tbody');
+  const rows = Object.entries(g.by_tool || {});
+  if (rows.length) {
+    tbody.innerHTML = rows.map(([name, t]) =>
+      `<tr><td>${name}</td><td class="num">${fmt(t.calls)}</td>` +
+      `<td class="num">${fmt(t.chars_before)}</td>` +
+      `<td class="num">${fmt(t.chars_after)}</td>` +
+      `<td class="num">${fmt(t.chars_saved)} (${t.saved_pct}%)</td></tr>`).join('');
+  }
+}
+
 async function tick() {
   try {
-    const [s, q] = await Promise.all([
+    const [s, q, g] = await Promise.all([
       fetch('/stats').then(r => r.json()),
       fetch('/quality').then(r => r.json()),
+      fetch('/gateway-stats').then(r => r.json()).catch(() => ({})),
     ]);
+    renderGateway(g);
     const tokens = s.tokens_saved_estimate_total || 0;
     const price = parseFloat($('price').value) || 0;
     $('tokens').textContent = fmt(tokens);

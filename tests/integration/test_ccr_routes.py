@@ -31,8 +31,14 @@ _LONG_PROSE = (
 
 
 @pytest.fixture
-def client() -> TestClient:
-    config = Config(upstream_api_key="test-key", compression_enabled=True)
+def client(tmp_path: object) -> TestClient:
+    # Point the gateway-stats bridge at a throwaway file so tests never read or
+    # create the real ~/.contextly/gateway_stats.db.
+    config = Config(
+        upstream_api_key="test-key",
+        compression_enabled=True,
+        gateway_stats_path=f"{tmp_path}/gw.db",
+    )
     app = create_app(config)
     return TestClient(app)
 
@@ -181,6 +187,37 @@ def test_root_redirects_to_dashboard(client: TestClient) -> None:
 
 def test_favicon_returns_no_content(client: TestClient) -> None:
     assert client.get("/favicon.ico").status_code == 204
+
+
+# ── GET /gateway-stats (proxy ⇄ gateway bridge) ───────────────────────────────
+
+
+def test_gateway_stats_empty_is_neutral(client: TestClient) -> None:
+    body = client.get("/gateway-stats").json()
+    assert body["tool_calls_total"] == 0
+    assert body["by_tool"] == {}
+
+
+def test_gateway_stats_reflects_shared_file(tmp_path: object) -> None:
+    # A gateway process writes savings to the shared file; the proxy dashboard's
+    # /gateway-stats endpoint, reading the same file, must surface them.
+    from contextly.gateway_stats import SQLiteStatsStore
+
+    db = f"{tmp_path}/gw.db"
+    SQLiteStatsStore(db, server="nocodb").record("queryRecords", 10056, 6442)
+
+    config = Config(upstream_api_key="k", compression_enabled=True, gateway_stats_path=db)
+    with TestClient(create_app(config)) as c:
+        body = c.get("/gateway-stats").json()
+
+    assert body["tool_calls_total"] == 1
+    assert "nocodb · queryRecords" in body["by_tool"]
+    assert body["tokens_saved_estimate_total"] == (10056 - 6442) // 4
+
+
+def test_dashboard_polls_gateway_stats(client: TestClient) -> None:
+    # The dashboard page must wire up the gateway section.
+    assert "/gateway-stats" in client.get("/dashboard").text
 
 
 # ── CCR isolation between TestClient instances ────────────────────────────────

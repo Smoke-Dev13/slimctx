@@ -31,6 +31,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.gateway_stats import SQLiteStatsStore, default_stats_path
 from contextly.routes.observability import router as obs_router
 from contextly.routes.openai_compat import router as openai_router
 
@@ -39,7 +40,16 @@ logger = structlog.get_logger(__name__)
 # Observability/probe endpoints the dashboard polls; their uvicorn access logs are
 # pure noise, so they are filtered out (real API traffic stays logged).
 _QUIET_ACCESS_PATHS: frozenset[str] = frozenset(
-    {"/", "/favicon.ico", "/stats", "/quality", "/dashboard", "/health", "/metrics"}
+    {
+        "/",
+        "/favicon.ico",
+        "/stats",
+        "/quality",
+        "/gateway-stats",
+        "/dashboard",
+        "/health",
+        "/metrics",
+    }
 )
 
 
@@ -143,6 +153,10 @@ def create_app(config: Config) -> FastAPI:
         SQLiteCCRStore(config.ccr_path) if config.ccr_backend == "sqlite" else CCRStore()
     )
     app.state.ab_monitor = ABMonitor()
+    # Read-only view onto the shared file the MCP gateway writes, so the proxy
+    # dashboard can surface gateway savings alongside its own (server label "" —
+    # snapshot() aggregates every server that wrote to the file).
+    app.state.gateway_stats = SQLiteStatsStore(config.gateway_stats_path or default_stats_path())
     app.include_router(obs_router)
     app.include_router(openai_router)
     return app

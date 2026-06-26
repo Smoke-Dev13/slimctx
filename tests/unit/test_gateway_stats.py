@@ -1,8 +1,9 @@
-"""Tests for the gateway savings tracker and its wiring into tool calls."""
+"""Tests for the gateway savings trackers and their wiring into tool calls."""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,7 @@ from contextly.mcp_gateway import build_gateway_server, build_router, derive_ser
 _JSON = json.dumps([{"id": i, "city": "Tbilisi", "plan": "gold"} for i in range(60)])
 
 
-# ── GatewayStats (pure) ─────────────────────────────────────────────────────────
+# ── GatewayStats (in-memory) ────────────────────────────────────────────────────
 
 
 def test_empty_snapshot_is_neutral() -> None:
@@ -49,42 +50,44 @@ def test_ratio_is_after_over_before() -> None:
 # ── SQLiteStatsStore (shared, multi-process) ────────────────────────────────────
 
 
-def test_sqlite_store_records_and_aggregates(tmp_path: object) -> None:
-    db = f"{tmp_path}/stats.db"  # type: ignore[str-bytes-safe]
-    store = SQLiteStatsStore(db, server="nocodb")
-    store.record("queryRecords", 10000, 6400)
+def test_sqlite_store_records_and_labels_by_server(tmp_path: Path) -> None:
+    store = SQLiteStatsStore(str(tmp_path / "gw.db"), server="nocodb")
+    store.record("queryRecords", 10056, 6442)
     store.record("queryRecords", 200, 200)  # no savings
     snap = store.snapshot()
 
     assert snap["tool_calls_total"] == 2
     assert snap["tool_calls_compressed"] == 1
-    assert snap["chars_saved_total"] == 3600
+    assert snap["chars_saved_total"] == 10056 - 6442
     assert snap["by_tool"]["nocodb · queryRecords"]["calls"] == 2
     assert snap["by_tool"]["nocodb · queryRecords"]["server"] == "nocodb"
 
 
-def test_sqlite_store_is_shared_across_instances(tmp_path: object) -> None:
+def test_sqlite_store_aggregates_servers_sharing_one_file(tmp_path: Path) -> None:
     # The whole point: two gateway processes (two stores) → one shared file →
-    # the dashboard reading either store sees the union, tagged per server.
-    db = f"{tmp_path}/shared.db"  # type: ignore[str-bytes-safe]
-    nocodb = SQLiteStatsStore(db, server="nocodb")
-    outline = SQLiteStatsStore(db, server="outline")
+    # a reader sees the union, tagged per server. This is what the dashboard uses.
+    db = str(tmp_path / "shared.db")
+    SQLiteStatsStore(db, server="nocodb").record("queryRecords", 1000, 600)
+    SQLiteStatsStore(db, server="outline").record("search", 500, 300)
 
-    nocodb.record("queryRecords", 1000, 600)
-    outline.record("search", 500, 300)
-
-    snap = outline.snapshot()  # read from the *other* instance
+    snap = SQLiteStatsStore(db).snapshot()  # third reader, no server label
     assert snap["tool_calls_total"] == 2
-    assert snap["chars_saved_total"] == 600  # 400 + 200
-    assert "nocodb · queryRecords" in snap["by_tool"]
-    assert "outline · search" in snap["by_tool"]
+    assert snap["chars_saved_total"] == 400 + 200
+    assert set(snap["by_tool"]) == {"nocodb · queryRecords", "outline · search"}
 
 
-def test_sqlite_store_persists_across_reopen(tmp_path: object) -> None:
-    db = f"{tmp_path}/persist.db"  # type: ignore[str-bytes-safe]
-    SQLiteStatsStore(db, server="s").record("t", 1000, 400)
-    reopened = SQLiteStatsStore(db, server="s")  # fresh instance, same file
-    assert reopened.snapshot()["chars_saved_total"] == 600
+def test_sqlite_store_persists_across_reopen(tmp_path: Path) -> None:
+    db = str(tmp_path / "persist.db")
+    SQLiteStatsStore(db, server="s").record("t", 1000, 100)
+    SQLiteStatsStore(db, server="s").record("t", 1000, 100)
+    assert SQLiteStatsStore(db).snapshot()["by_tool"]["s · t"]["calls"] == 2
+
+
+def test_sqlite_store_empty_is_neutral(tmp_path: Path) -> None:
+    snap = SQLiteStatsStore(str(tmp_path / "gw.db")).snapshot()
+    assert snap["tool_calls_total"] == 0
+    assert snap["compression_ratio_mean"] == 1.0
+    assert snap["by_tool"] == {}
 
 
 # ── derive_server_name ──────────────────────────────────────────────────────────

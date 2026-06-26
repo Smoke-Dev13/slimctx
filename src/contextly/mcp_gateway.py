@@ -41,7 +41,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.expand import filter_original
-from contextly.gateway_stats import SQLiteStatsStore, StatsRecorder
+from contextly.gateway_stats import SQLiteStatsStore, StatsRecorder, default_stats_path
 
 try:
     import mcp.types as types
@@ -226,11 +226,6 @@ def build_gateway_server(
             return await session.get_prompt(name, arguments)
 
     return server
-
-
-def default_stats_path() -> str:
-    """Shared stats file used by every gateway instance unless overridden."""
-    return str(Path.home() / ".contextly" / "gateway_stats.db")
 
 
 def derive_server_name(command: str, args: list[str]) -> str:
