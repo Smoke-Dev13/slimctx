@@ -173,6 +173,16 @@ def test_dashboard_serves_html(client: TestClient) -> None:
     assert "/stats" in resp.text  # the page polls the stats endpoint
 
 
+def test_root_redirects_to_dashboard(client: TestClient) -> None:
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code in (307, 308)
+    assert resp.headers["location"] == "/dashboard"
+
+
+def test_favicon_returns_no_content(client: TestClient) -> None:
+    assert client.get("/favicon.ico").status_code == 204
+
+
 # ── CCR isolation between TestClient instances ────────────────────────────────
 
 

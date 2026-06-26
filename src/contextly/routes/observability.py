@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from contextly.dashboard import DASHBOARD_HTML
 from contextly.deps import ABMonitorDep, ConfigDep
@@ -19,6 +19,18 @@ from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["observability"])
+
+
+@router.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Send the bare base URL to the dashboard so it just works in a browser."""
+    return RedirectResponse(url="/dashboard")
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """Silence the browser's automatic favicon request (no icon to serve)."""
+    return Response(status_code=204)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

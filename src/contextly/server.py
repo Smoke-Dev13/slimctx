@@ -39,7 +39,7 @@ logger = structlog.get_logger(__name__)
 # Observability/probe endpoints the dashboard polls; their uvicorn access logs are
 # pure noise, so they are filtered out (real API traffic stays logged).
 _QUIET_ACCESS_PATHS: frozenset[str] = frozenset(
-    {"/stats", "/quality", "/dashboard", "/health", "/metrics"}
+    {"/", "/favicon.ico", "/stats", "/quality", "/dashboard", "/health", "/metrics"}
 )
 
 
