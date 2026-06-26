@@ -83,3 +83,41 @@ async def test_gateway_records_savings_for_tool_call() -> None:
     assert snap["chars_saved_total"] > 0
     # The injected expand tool must not be counted as a downstream tool result.
     assert "contextly_expand" not in snap["by_tool"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_tool_survives_compressor_fault(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fault inside compression must never break the underlying tool call: the
+    # client must still receive the original output (best-effort compression).
+    import mcp.types as types
+    from mcp.server import Server
+    from mcp.shared.memory import create_connected_server_and_client_session as connect
+
+    import contextly.mcp_gateway as gw_mod
+
+    def _boom(*_args: object, **_kwargs: object) -> tuple[str, str | None]:
+        raise RuntimeError("compressor exploded")
+
+    monkeypatch.setattr(gw_mod, "compress_payload", _boom)
+
+    downstream: Server = Server("downstream")
+
+    @downstream.list_tools()
+    async def _lt() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name="rows", description="rows", inputSchema={"type": "object", "properties": {}}
+            )
+        ]
+
+    @downstream.call_tool()
+    async def _ct(name: str, arguments: dict[str, object]) -> list[types.ContentBlock]:
+        return [types.TextContent(type="text", text=_JSON)]
+
+    async with connect(downstream) as down_session:
+        gateway = gw_mod.build_gateway_server(down_session, CCRStore(), gw_mod.build_router())
+        async with connect(gateway) as gw:
+            result = await gw.call_tool("rows", {})
+
+    assert not result.isError
+    assert result.content[0].text == _JSON  # type: ignore[union-attr]  # raw original survives

@@ -157,7 +157,13 @@ def build_gateway_server(
         new_content: list[types.ContentBlock] = []
         for block in result.content:
             if isinstance(block, types.TextContent):
-                compressed, _ref = compress_payload(block.text, router, store)
+                # Compression is best-effort: a compressor fault must never turn a
+                # working tool into a failing one, so fall back to the raw text.
+                try:
+                    compressed, _ref = compress_payload(block.text, router, store)
+                except Exception:
+                    logger.warning("gateway_compress_failed", tool=name, exc_info=True)
+                    compressed = block.text
                 new_content.append(types.TextContent(type="text", text=compressed))
             else:
                 new_content.append(block)
