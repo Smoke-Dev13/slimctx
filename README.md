@@ -403,6 +403,13 @@ contextly mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /data
 
 Requires the `mcp` extra (`pip install "contextly[mcp-server]"`); the published binaries already bundle it.
 
+**Live gateway dashboard.** The gateway has no FastAPI app of its own (its stdout is reserved for JSON-RPC), so it serves a small dashboard on a background thread. While Claude Desktop is connected, open <http://127.0.0.1:4100/dashboard> to watch per-tool savings update live — total tokens/characters saved, average compression, and a per-tool breakdown. Change the port with `--dashboard-port` (and `--dashboard-host`), or pass `--dashboard-port 0` to disable it:
+
+```json
+"args": ["mcp-gateway", "--dashboard-port", "4100", "--",
+         "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+```
+
 > Note: this compresses the **tool outputs** flowing through MCP. It cannot compress the Claude Desktop chat itself — that conversation goes straight to Anthropic and has no proxy hook.
 
 ---

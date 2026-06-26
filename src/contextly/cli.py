@@ -254,13 +254,29 @@ def mcp_server() -> None:
     name="mcp-gateway",
     context_settings={"ignore_unknown_options": True},
 )
+@click.option(
+    "--dashboard-port",
+    default=4100,
+    show_default=True,
+    type=int,
+    help="Serve a live savings dashboard on this port (0 disables it)",
+)
+@click.option(
+    "--dashboard-host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Bind host for the savings dashboard",
+)
 @click.argument("downstream", nargs=-1, type=click.UNPROCESSED)
-def mcp_gateway(downstream: tuple[str, ...]) -> None:
+def mcp_gateway(dashboard_port: int, dashboard_host: str, downstream: tuple[str, ...]) -> None:
     """Proxy a downstream MCP server, compressing its tool outputs on the way back.
 
     Put Contextly between an MCP client (Claude Desktop) and another MCP server:
     the client sees the downstream tools unchanged, but their outputs are
     compressed, with an injected ``expand`` tool to recover the full original.
+
+    While connected, open http://127.0.0.1:4100/dashboard to watch per-tool
+    savings update live (change the port with --dashboard-port, 0 to disable).
 
     Pass the downstream server command after ``--``.
 
@@ -293,7 +309,14 @@ def mcp_gateway(downstream: tuple[str, ...]) -> None:
         click.echo(f"MCP gateway requires the 'mcp' package: {exc}", err=True)
         sys.exit(1)
 
-    asyncio.run(run_gateway(cmd[0], cmd[1:]))
+    asyncio.run(
+        run_gateway(
+            cmd[0],
+            cmd[1:],
+            dashboard_host=dashboard_host,
+            dashboard_port=dashboard_port or None,
+        )
+    )
 
 
 @main.command()

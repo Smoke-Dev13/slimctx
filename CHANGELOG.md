@@ -3,6 +3,16 @@
 All notable changes to Contextly are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Live MCP gateway dashboard.** The gateway now serves its own self-updating
+  savings dashboard on a background thread (default
+  <http://127.0.0.1:4100/dashboard>), since its stdout is reserved for JSON-RPC
+  and it cannot reuse the proxy's `/dashboard`. Shows total tokens/characters
+  saved, average compression, and a live per-tool breakdown. Configure with
+  `--dashboard-port` / `--dashboard-host`; disable with `--dashboard-port 0`.
+
 ## [0.1.0] - 2026-06-22
 
 First public release — a reversible compression gateway for LLM APIs.
