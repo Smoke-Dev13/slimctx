@@ -160,3 +160,69 @@ def test_reorder_list_content_messages() -> None:
     result = s.reorder(msgs, "latest")
     assert result[-1]["content"] == "latest"
     assert len(result) == 5
+
+
+# ── cache-stable reorder ────────────────────────────────────────────────────────
+
+
+def test_cache_stable_keeps_prefix_chronological() -> None:
+    s = _scorer()
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first old"},
+        {"role": "assistant", "content": "second old"},
+        {"role": "tool", "content": "database query results here"},
+        {"role": "user", "content": "latest"},
+    ]
+    result = s.reorder(msgs, "database query", cache_stable=True, recent_window=2)
+    # prefix (indices 0..2) preserved in original order — cache-stable
+    assert result[0]["content"] == "sys"
+    assert result[1]["content"] == "first old"
+    assert result[2]["content"] == "second old"
+    # latest user still last
+    assert result[-1]["content"] == "latest"
+    assert len(result) == 5
+
+
+def test_cache_stable_prefix_identical_across_turns() -> None:
+    s = _scorer()
+    base = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    turn1 = s.reorder(base, "q2", cache_stable=True, recent_window=2)
+    # next turn appends a new exchange
+    turn2_input = [*base, {"role": "user", "content": "q3"}]
+    turn2 = s.reorder(turn2_input, "q3", cache_stable=True, recent_window=2)
+    # the cacheable prefix (everything before the tail) is byte-identical
+    assert turn1[:3] == turn2[:3]
+
+
+def test_cache_stable_preserves_all_messages() -> None:
+    s = _scorer()
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "tool", "content": "c"},
+        {"role": "user", "content": "d"},
+    ]
+    result = s.reorder(msgs, "d", cache_stable=True, recent_window=2)
+    assert {m["content"] for m in result} == {m["content"] for m in msgs}
+    assert len(result) == len(msgs)
+
+
+def test_cache_stable_window_one_is_noop() -> None:
+    s = _scorer()
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "tool", "content": "c"},
+        {"role": "user", "content": "d"},
+    ]
+    result = s.reorder(msgs, "d", cache_stable=True, recent_window=1)
+    assert result is msgs

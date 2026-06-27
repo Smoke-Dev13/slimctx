@@ -14,6 +14,7 @@ from fastapi import Depends, Request
 
 from contextly.ab_monitor import ABMonitor
 from contextly.audit import AuditWriter
+from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
@@ -71,6 +72,10 @@ def _get_failover_router(request: Request) -> FailoverRouter:
     return cast(FailoverRouter, request.app.state.failover_router)
 
 
+def _get_cache_optimizer(request: Request) -> CacheOptimizer:
+    return cast(CacheOptimizer, request.app.state.cache_optimizer)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -83,3 +88,4 @@ AuditWriterDep = Annotated[AuditWriter | None, Depends(_get_audit_writer)]
 InjectionScannerDep = Annotated[InjectionScanner, Depends(_get_injection_scanner)]
 MessageScorerDep = Annotated[MessageScorer, Depends(_get_message_scorer)]
 FailoverRouterDep = Annotated[FailoverRouter, Depends(_get_failover_router)]
+CacheOptimizerDep = Annotated[CacheOptimizer, Depends(_get_cache_optimizer)]

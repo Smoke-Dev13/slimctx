@@ -21,6 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response, StreamingResponse
 
 from contextly.ab_monitor import _extract_response_text, run_shadow_ab
+from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore
 from contextly.ccr import content_key as _ccr_key
 from contextly.compressors.registry import ContentRouter
@@ -29,6 +30,7 @@ from contextly.deps import (
     ABMonitorDep,
     AggressiveContentRouterDep,
     AuditWriterDep,
+    CacheOptimizerDep,
     CCRDep,
     ConfigDep,
     ContentRouterDep,
@@ -40,7 +42,7 @@ from contextly.deps import (
 )
 from contextly.expand import filter_original
 from contextly.metrics import observe_request
-from contextly.pricing import tokens_to_dollars
+from contextly.pricing import price_per_1k_tokens, tokens_to_dollars
 
 # Keeps strong references to background tasks so they aren't GC'd before completion.
 _background_tasks: set[asyncio.Task[None]] = set()
@@ -298,6 +300,30 @@ def _compress_messages(
     return out, totals, ccr_keys
 
 
+def _account_cache_usage(
+    resp: httpx.Response,
+    model: str,
+    config: Config,
+    cache_optimizer: CacheOptimizer,
+) -> int:
+    """Parse cache usage from an upstream response and record the savings.
+
+    Handles both OpenAI (``usage.prompt_tokens_details.cached_tokens``) and
+    Anthropic (``usage.cache_read_input_tokens``) shapes. Returns the number of
+    cache-hit tokens, or 0 when none / on parse failure.
+    """
+    try:
+        usage = json.loads(resp.content).get("usage") or {}
+    except (ValueError, AttributeError):
+        return 0
+    if not isinstance(usage, dict):
+        return 0
+    price = price_per_1k_tokens(model, config.pricing_overrides or {})
+    if "cache_read_input_tokens" in usage:
+        return cache_optimizer.record_anthropic_usage(usage, price)
+    return cache_optimizer.record_openai_usage(usage, price)
+
+
 def _extract_last_user_query(payload: dict[str, Any]) -> str:
     """Extract the last user-role message text for query-aware compression."""
     for msg in reversed(payload.get("messages", [])):
@@ -326,6 +352,7 @@ async def chat_completions(
     injection_scanner: InjectionScannerDep,
     message_scorer: MessageScorerDep,
     failover_router: FailoverRouterDep,
+    cache_optimizer: CacheOptimizerDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -456,6 +483,8 @@ async def chat_completions(
             payload.get("messages", []),
             _extract_last_user_query(payload),
             min_messages=config.context_reorder_min_messages,
+            cache_stable=config.context_reorder_cache_stable,
+            recent_window=config.cache_recent_window,
         )
         if reordered is not payload.get("messages", []):
             payload = {**payload, "messages": reordered}
@@ -524,6 +553,11 @@ async def chat_completions(
     latency = time.monotonic() - t0
     log.info("upstream_response", status=upstream_resp.status_code, latency=round(latency, 3))
 
+    if config.cache_optimization_enabled and upstream_resp.status_code == 200:
+        cached = _account_cache_usage(upstream_resp, model, config, cache_optimizer)
+        if cached > 0:
+            extra_headers["X-Contextly-Cache-Hit-Tokens"] = str(cached)
+
     observe_request(
         model=model,
         compressor=dominant_compressor,
@@ -573,6 +607,7 @@ async def anthropic_messages(
     safe_content_router: SafeContentRouterDep,
     ccr_store: CCRDep,
     ab_monitor: ABMonitorDep,
+    cache_optimizer: CacheOptimizerDep,
 ) -> Response:
     """Proxy Anthropic-style /v1/messages with compression.
 
@@ -618,6 +653,19 @@ async def anthropic_messages(
     if ccr_keys:
         extra_headers["X-Contextly-CCR-Keys"] = json.dumps(ccr_keys)
 
+    if config.cache_optimization_enabled:
+        new_messages, new_system, n_breakpoints = cache_optimizer.inject_anthropic_breakpoints(
+            payload.get("messages", []),
+            payload.get("system"),
+            min_prefix_chars=config.cache_min_prefix_chars,
+            recent_window=config.cache_recent_window,
+        )
+        if n_breakpoints > 0:
+            payload = {**payload, "messages": new_messages}
+            if new_system is not None:
+                payload["system"] = new_system
+            extra_headers["X-Contextly-Cache-Breakpoints"] = str(n_breakpoints)
+
     if is_streaming:
         return StreamingResponse(
             _proxy_stream(http_client, upstream_url, headers, payload),
@@ -626,6 +674,13 @@ async def anthropic_messages(
         )
 
     upstream_resp = await http_client.post(upstream_url, headers=headers, json=payload)
+
+    if config.cache_optimization_enabled and upstream_resp.status_code == 200:
+        model = str(payload.get("model", "unknown"))
+        cached = _account_cache_usage(upstream_resp, model, config, cache_optimizer)
+        if cached > 0:
+            extra_headers["X-Contextly-Cache-Hit-Tokens"] = str(cached)
+
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,

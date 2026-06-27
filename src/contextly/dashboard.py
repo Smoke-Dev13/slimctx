@@ -176,6 +176,11 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="value" id="injection" style="color:var(--danger)">—</div>
       <div class="card-sub">detected / blocked</div>
     </div>
+    <div class="card card-accent" data-tip="Dollars saved via prompt caching">
+      <div class="label">Cache savings</div>
+      <div class="value green" id="cache">—</div>
+      <div class="card-sub" id="cache-sub">prompt cache</div>
+    </div>
   </div>
 
   <div class="section">
@@ -357,6 +362,8 @@ async function tick() {
     $('numeric').className = 'value' + (nMean != null ? ' ' + qClass(nMean) : '');
     const detected = s.injections_detected_total || 0, blocked = s.injections_blocked_total || 0;
     $('injection').textContent = detected + ' / ' + blocked;
+    $('cache').textContent = '$' + (s.cache_savings_dollars_total || 0).toFixed(4);
+    $('cache-sub').textContent = fmt(s.cache_hit_tokens_total || 0) + ' cached tokens';
     const cRows = Object.entries(q.by_compressor || {});
     if (cRows.length) {
       $('byc-body').innerHTML = cRows
