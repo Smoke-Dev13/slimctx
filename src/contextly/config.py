@@ -124,6 +124,10 @@ class Config(BaseSettings):
     # Empty string disables auditing.
     audit_log_path: str = ""
 
+    # ── Context reordering ───────────────────────────────────────────────────
+    context_reorder_enabled: bool = False
+    context_reorder_min_messages: int = 5
+
     # ── Prompt injection detection ───────────────────────────────────────────
     injection_detection_enabled: bool = False
     injection_block_threshold: float | None = None

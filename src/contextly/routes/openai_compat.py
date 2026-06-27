@@ -34,6 +34,7 @@ from contextly.deps import (
     ContentRouterDep,
     HttpClientDep,
     InjectionScannerDep,
+    MessageScorerDep,
     SafeContentRouterDep,
 )
 from contextly.expand import filter_original
@@ -322,6 +323,7 @@ async def chat_completions(
     ab_monitor: ABMonitorDep,
     audit_writer: AuditWriterDep,
     injection_scanner: InjectionScannerDep,
+    message_scorer: MessageScorerDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -446,6 +448,16 @@ async def chat_completions(
                         estimated_tokens=total_compressed_chars // 4,
                         context_window=context_window,
                     )
+
+    if config.context_reorder_enabled:
+        reordered = message_scorer.reorder(
+            payload.get("messages", []),
+            _extract_last_user_query(payload),
+            min_messages=config.context_reorder_min_messages,
+        )
+        if reordered is not payload.get("messages", []):
+            payload = {**payload, "messages": reordered}
+            response_headers["X-Contextly-Reordered"] = "true"
 
     dollars_saved = tokens_to_dollars(
         total_tokens_saved_estimate, model, config.pricing_overrides or {}
