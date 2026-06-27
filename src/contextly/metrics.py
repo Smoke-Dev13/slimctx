@@ -69,7 +69,7 @@ TOKENS_SAVED_TOTAL: Any = Counter(
 
 DOLLARS_SAVED_TOTAL: Any = Counter(
     "contextly_dollars_saved_total",
-    "Cumulative estimated USD saved by compression (tokens_saved × price/token).",
+    "Cumulative estimated USD saved by compression (tokens_saved * price/token).",
     ["model", "compressor"],
 )
 
@@ -104,7 +104,7 @@ def observe_request(
         compressed_chars: Total chars after compression.
         latency_seconds: Wall-clock seconds from request start to upstream reply.
         tokens_saved_estimate: Estimated tokens saved (chars // 4 when exact count unavailable).
-        dollars_saved: Estimated USD saved (tokens_saved × model price/token).
+        dollars_saved: Estimated USD saved (tokens_saved * model price/token).
     """
     REQUESTS_TOTAL.labels(model=model, compressor=compressor).inc()
 

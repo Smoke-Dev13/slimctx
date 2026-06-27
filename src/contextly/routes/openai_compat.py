@@ -22,10 +22,9 @@ from fastapi.responses import Response, StreamingResponse
 
 from contextly.ab_monitor import _extract_response_text, run_shadow_ab
 from contextly.ccr import CCRStore
-from contextly.compressors.registry import ContentRouter
-from contextly.config import Config
 from contextly.ccr import content_key as _ccr_key
-from contextly.config import MODEL_CONTEXT_WINDOWS
+from contextly.compressors.registry import ContentRouter
+from contextly.config import MODEL_CONTEXT_WINDOWS, Config
 from contextly.deps import (
     ABMonitorDep,
     AggressiveContentRouterDep,

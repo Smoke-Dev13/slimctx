@@ -42,7 +42,7 @@ _PRICING: dict[str, float] = {
     "gemini-2.0-flash": 0.0001,
 }
 
-# Tokens saved × this multiplier = dollars saved estimate
+# Tokens saved * this multiplier = dollars saved estimate
 _DOLLARS_PER_1K = 0.002  # conservative fallback
 
 
@@ -79,7 +79,9 @@ def price_per_1k_tokens(model: str, overrides: dict[str, float] | None = None) -
     return _DOLLARS_PER_1K
 
 
-def tokens_to_dollars(tokens_saved: int, model: str, overrides: dict[str, float] | None = None) -> float:
+def tokens_to_dollars(
+    tokens_saved: int, model: str, overrides: dict[str, float] | None = None
+) -> float:
     """Convert *tokens_saved* to an estimated dollar saving for *model*.
 
     Args:

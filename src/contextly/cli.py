@@ -416,7 +416,7 @@ def audit_replay(log_file: str, proxy_url: str, limit: int) -> None:
                     preview = original[:200] + ("…" if len(original) > 200 else "")
                     click.echo(f"  original preview: {preview!r}")
                 else:
-                    click.echo(f"  [CCR key not found — may have been evicted]")
+                    click.echo("  [CCR key not found — may have been evicted]")
             except _httpx.ConnectError:
                 click.echo(f"  [proxy unreachable at {proxy_url}]")
     client.close()

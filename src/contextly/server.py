@@ -111,7 +111,9 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("contextly_stopped")
 
 
-def _build_router(compression_enabled: bool, *, safe: bool, aggressive: bool = False) -> ContentRouter:
+def _build_router(
+    compression_enabled: bool, *, safe: bool, aggressive: bool = False
+) -> ContentRouter:
     """Build a content router.
 
     json_table (lossless JSON) and code compression run in every mode. The lossy
