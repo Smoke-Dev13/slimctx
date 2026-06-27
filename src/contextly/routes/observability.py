@@ -14,7 +14,13 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from contextly.dashboard import DASHBOARD_HTML
-from contextly.deps import ABMonitorDep, ConfigDep, GatewayStatsDep, InjectionScannerDep
+from contextly.deps import (
+    ABMonitorDep,
+    ConfigDep,
+    FailoverRouterDep,
+    GatewayStatsDep,
+    InjectionScannerDep,
+)
 from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
 
 logger = structlog.get_logger(__name__)
@@ -54,7 +60,11 @@ async def health(config: ConfigDep) -> JSONResponse:
 
 
 @router.get("/stats")
-async def stats(ab_monitor: ABMonitorDep, injection_scanner: InjectionScannerDep) -> JSONResponse:
+async def stats(
+    ab_monitor: ABMonitorDep,
+    injection_scanner: InjectionScannerDep,
+    failover_router: FailoverRouterDep,
+) -> JSONResponse:
     """Aggregate runtime statistics.
 
     Returns compression throughput counters accumulated since server start.
@@ -66,7 +76,9 @@ async def stats(ab_monitor: ABMonitorDep, injection_scanner: InjectionScannerDep
     Returns:
         JSON with request and compression aggregate stats.
     """
-    return JSONResponse({**ab_monitor.stats(), **injection_scanner.stats()})
+    return JSONResponse(
+        {**ab_monitor.stats(), **injection_scanner.stats(), **failover_router.stats()}
+    )
 
 
 @router.get("/gateway-stats")

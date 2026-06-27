@@ -124,9 +124,20 @@ class Config(BaseSettings):
     # Empty string disables auditing.
     audit_log_path: str = ""
 
+    # ── Context reordering ───────────────────────────────────────────────────
+    context_reorder_enabled: bool = False
+    context_reorder_min_messages: int = 5
+
     # ── Prompt injection detection ───────────────────────────────────────────
     injection_detection_enabled: bool = False
     injection_block_threshold: float | None = None
+
+    # ── Multi-model failover ─────────────────────────────────────────────────
+    # Ordered list of fallback upstreams. Each entry: {"url": "...", "api_key": "...",
+    # "provider": "openrouter"}. Primary upstream is always tried first; these are
+    # used only when the primary returns a retryable error (429/5xx/connect failure).
+    failover_upstreams: list[dict[str, str]] = Field(default_factory=list)
+    failover_max_retries: int = 3
 
     # ── Gateway stats bridge ────────────────────────────────────────────────
     # The proxy dashboard also surfaces the MCP gateway's savings by reading the
