@@ -32,6 +32,7 @@ from contextly.deps import (
     CCRDep,
     ConfigDep,
     ContentRouterDep,
+    FailoverRouterDep,
     HttpClientDep,
     InjectionScannerDep,
     MessageScorerDep,
@@ -324,6 +325,7 @@ async def chat_completions(
     audit_writer: AuditWriterDep,
     injection_scanner: InjectionScannerDep,
     message_scorer: MessageScorerDep,
+    failover_router: FailoverRouterDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -480,7 +482,8 @@ async def chat_completions(
             dollars_saved=dollars_saved,
         )
 
-    upstream_url = f"{config.resolved_upstream_url()}/v1/chat/completions"
+    _path = "/v1/chat/completions"
+    upstream_url = f"{config.resolved_upstream_url()}{_path}"
     headers = _build_upstream_headers(request, config.upstream_api_key)
     extra_headers: dict[str, str] = {
         "X-Contextly-Compressed": str(config.compression_enabled).lower(),
@@ -511,7 +514,13 @@ async def chat_completions(
             headers=extra_headers,
         )
 
-    upstream_resp = await http_client.post(upstream_url, headers=headers, json=payload)
+    if failover_router.has_fallbacks:
+        upstream_resp, upstream_provider = await failover_router.attempt(
+            http_client, _path, headers, payload
+        )
+        extra_headers["X-Contextly-Upstream-Used"] = upstream_provider
+    else:
+        upstream_resp = await http_client.post(upstream_url, headers=headers, json=payload)
     latency = time.monotonic() - t0
     log.info("upstream_response", status=upstream_resp.status_code, latency=round(latency, 3))
 

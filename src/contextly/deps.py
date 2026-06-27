@@ -17,6 +17,7 @@ from contextly.audit import AuditWriter
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.failover import FailoverRouter
 from contextly.gateway_stats import SQLiteStatsStore
 from contextly.injection import InjectionScanner
 from contextly.scorer import MessageScorer
@@ -66,6 +67,10 @@ def _get_message_scorer(request: Request) -> MessageScorer:
     return cast(MessageScorer, request.app.state.message_scorer)
 
 
+def _get_failover_router(request: Request) -> FailoverRouter:
+    return cast(FailoverRouter, request.app.state.failover_router)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -77,3 +82,4 @@ GatewayStatsDep = Annotated[SQLiteStatsStore, Depends(_get_gateway_stats)]
 AuditWriterDep = Annotated[AuditWriter | None, Depends(_get_audit_writer)]
 InjectionScannerDep = Annotated[InjectionScanner, Depends(_get_injection_scanner)]
 MessageScorerDep = Annotated[MessageScorer, Depends(_get_message_scorer)]
+FailoverRouterDep = Annotated[FailoverRouter, Depends(_get_failover_router)]
