@@ -223,11 +223,11 @@ def _compress_messages(
             sha = _ccr_key(text)
             if sha in seen_hashes:
                 first_slot = seen_hashes[sha]
-                stored_key = ccr_store.store(text)
-                ccr_keys[slot] = stored_key
+                dedup_key = ccr_store.store(text)
+                ccr_keys[slot] = dedup_key
                 sentinel = (
                     f"[duplicate of {first_slot} — identical content omitted to save tokens; "
-                    f'contextly_expand("{stored_key}") to recover]'
+                    f'contextly_expand("{dedup_key}") to recover]'
                 )
                 orig += len(text)
                 comp += len(sentinel)
@@ -237,7 +237,7 @@ def _compress_messages(
                     audit_writer.record(
                         model=model,
                         msg_index=slot,
-                        ccr_key=stored_key,
+                        ccr_key=dedup_key,
                         compressor="dedup",
                         original_chars=len(text),
                         compressed_chars=len(sentinel),
@@ -250,7 +250,7 @@ def _compress_messages(
         orig += result.original_length
         comp += result.compressed_length
         saved += result.tokens_saved_estimate
-        stored_key: str | None = None
+        stored_key = None
         if result.compression_ratio < 1.0:
             dominant = result.compressor_name
             stored_key = ccr_store.store(text)
