@@ -16,6 +16,7 @@ from contextly.ab_monitor import ABMonitor
 from contextly.audit import AuditWriter
 from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore
+from contextly.compressors.image import ImageCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
 from contextly.controller import AdaptiveController
@@ -81,6 +82,10 @@ def _get_adaptive_controller(request: Request) -> AdaptiveController:
     return cast(AdaptiveController, request.app.state.adaptive_controller)
 
 
+def _get_image_compressor(request: Request) -> ImageCompressor:
+    return cast(ImageCompressor, request.app.state.image_compressor)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -95,3 +100,4 @@ MessageScorerDep = Annotated[MessageScorer, Depends(_get_message_scorer)]
 FailoverRouterDep = Annotated[FailoverRouter, Depends(_get_failover_router)]
 CacheOptimizerDep = Annotated[CacheOptimizer, Depends(_get_cache_optimizer)]
 AdaptiveControllerDep = Annotated[AdaptiveController, Depends(_get_adaptive_controller)]
+ImageCompressorDep = Annotated[ImageCompressor, Depends(_get_image_compressor)]

@@ -33,8 +33,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["sentence-transformers>=3.0.0"]
+ml = ["sentence-transformers>=3.0.0", "llmlingua>=0.2.2"]
 nlp = ["yake>=0.4.8"]
+image = ["pillow>=10.0.0"]
 ast = [
     "tree-sitter>=0.22.0",
     "tree-sitter-python>=0.21.0",
@@ -42,7 +43,7 @@ ast = [
     "tree-sitter-go>=0.21.0",
 ]
 mcp-server = ["mcp>=1.0.0"]
-all = ["contextly[ml,nlp,ast,mcp-server]"]
+all = ["contextly[ml,nlp,ast,mcp-server,image]"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
