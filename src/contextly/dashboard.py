@@ -191,6 +191,11 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="value blue" id="images">—</div>
       <div class="card-sub">multimodal</div>
     </div>
+    <div class="card" data-tip="Secrets / PII redacted before reaching the upstream LLM">
+      <div class="label">Secrets redacted</div>
+      <div class="value" id="secrets" style="color:var(--danger)">—</div>
+      <div class="card-sub">semantic firewall</div>
+    </div>
   </div>
 
   <div class="section">
@@ -378,6 +383,7 @@ async function tick() {
     $('adaptive').textContent = '↑' + ups + ' ↓' + downs;
     $('adaptive-sub').textContent = fmt(s.verbosity_spikes_total || 0) + ' verbosity spikes';
     $('images').textContent = fmt(s.image_parts_compressed_total || 0);
+    $('secrets').textContent = fmt(s.secrets_redacted_total || 0);
     const cRows = Object.entries(q.by_compressor || {});
     if (cRows.length) {
       $('byc-body').innerHTML = cRows

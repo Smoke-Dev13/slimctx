@@ -42,6 +42,7 @@ from contextly.deps import (
     InjectionScannerDep,
     MessageScorerDep,
     SafeContentRouterDep,
+    SecretRedactorDep,
 )
 from contextly.expand import filter_original
 from contextly.metrics import observe_request
@@ -401,6 +402,7 @@ async def chat_completions(
     cache_optimizer: CacheOptimizerDep,
     adaptive_controller: AdaptiveControllerDep,
     image_compressor: ImageCompressorDep,
+    secret_redactor: SecretRedactorDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -487,6 +489,22 @@ async def chat_completions(
                 return Response(
                     status_code=400,
                     content=json.dumps({"error": "injection_detected"}),
+                    media_type="application/json",
+                )
+
+    # Semantic firewall: redact secrets/PII before compression, storage, or audit.
+    if config.firewall_enabled:
+        redacted_messages, n_secrets = secret_redactor.redact_messages(
+            payload.get("messages", []),
+            ccr_store=ccr_store if config.firewall_reversible else None,
+        )
+        if n_secrets:
+            payload = {**payload, "messages": redacted_messages}
+            response_headers["X-Contextly-Secrets-Redacted"] = str(n_secrets)
+            if config.firewall_block_on_secret:
+                return Response(
+                    status_code=400,
+                    content=json.dumps({"error": "secret_detected"}),
                     media_type="application/json",
                 )
 
@@ -701,6 +719,7 @@ async def anthropic_messages(
     ccr_store: CCRDep,
     ab_monitor: ABMonitorDep,
     cache_optimizer: CacheOptimizerDep,
+    secret_redactor: SecretRedactorDep,
 ) -> Response:
     """Proxy Anthropic-style /v1/messages with compression.
 
@@ -724,6 +743,22 @@ async def anthropic_messages(
     payload: dict[str, Any] = json.loads(raw_body)
     is_streaming: bool = bool(payload.get("stream", False))
     ccr_keys: dict[str, str] = {}
+    secrets_redacted = 0
+
+    # Semantic firewall: redact secrets/PII before compression, storage, or audit.
+    if config.firewall_enabled:
+        redacted_messages, secrets_redacted = secret_redactor.redact_messages(
+            payload.get("messages", []),
+            ccr_store=ccr_store if config.firewall_reversible else None,
+        )
+        if secrets_redacted:
+            payload = {**payload, "messages": redacted_messages}
+            if config.firewall_block_on_secret:
+                return Response(
+                    status_code=400,
+                    content=json.dumps({"error": "secret_detected"}),
+                    media_type="application/json",
+                )
 
     router = _select_router(request, config, content_router, safe_content_router)
     if router is not None:
@@ -745,6 +780,8 @@ async def anthropic_messages(
     extra_headers: dict[str, str] = {}
     if ccr_keys:
         extra_headers["X-Contextly-CCR-Keys"] = json.dumps(ccr_keys)
+    if secrets_redacted:
+        extra_headers["X-Contextly-Secrets-Redacted"] = str(secrets_redacted)
 
     if config.cache_optimization_enabled:
         new_messages, new_system, n_breakpoints = cache_optimizer.inject_anthropic_breakpoints(

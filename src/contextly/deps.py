@@ -21,6 +21,7 @@ from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
 from contextly.controller import AdaptiveController
 from contextly.failover import FailoverRouter
+from contextly.firewall import SecretRedactor
 from contextly.gateway_stats import SQLiteStatsStore
 from contextly.injection import InjectionScanner
 from contextly.scorer import MessageScorer
@@ -86,6 +87,10 @@ def _get_image_compressor(request: Request) -> ImageCompressor:
     return cast(ImageCompressor, request.app.state.image_compressor)
 
 
+def _get_secret_redactor(request: Request) -> SecretRedactor:
+    return cast(SecretRedactor, request.app.state.secret_redactor)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -101,3 +106,4 @@ FailoverRouterDep = Annotated[FailoverRouter, Depends(_get_failover_router)]
 CacheOptimizerDep = Annotated[CacheOptimizer, Depends(_get_cache_optimizer)]
 AdaptiveControllerDep = Annotated[AdaptiveController, Depends(_get_adaptive_controller)]
 ImageCompressorDep = Annotated[ImageCompressor, Depends(_get_image_compressor)]
+SecretRedactorDep = Annotated[SecretRedactor, Depends(_get_secret_redactor)]

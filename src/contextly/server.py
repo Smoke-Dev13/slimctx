@@ -39,6 +39,7 @@ from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
 from contextly.controller import AdaptiveController
 from contextly.failover import FailoverRouter, FailoverTarget
+from contextly.firewall import SecretRedactor
 from contextly.gateway_stats import SQLiteStatsStore, default_stats_path
 from contextly.injection import InjectionScanner
 from contextly.routes.observability import router as obs_router
@@ -195,6 +196,7 @@ def create_app(config: Config) -> FastAPI:
     app.state.gateway_stats = SQLiteStatsStore(config.gateway_stats_path or default_stats_path())
     app.state.audit_writer = AuditWriter(config.audit_log_path) if config.audit_log_path else None
     app.state.injection_scanner = InjectionScanner()
+    app.state.secret_redactor = SecretRedactor()
     app.state.message_scorer = MessageScorer()
     app.state.cache_optimizer = CacheOptimizer()
     app.state.adaptive_controller = AdaptiveController(

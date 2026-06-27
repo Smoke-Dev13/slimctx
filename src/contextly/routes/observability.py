@@ -23,6 +23,7 @@ from contextly.deps import (
     GatewayStatsDep,
     ImageCompressorDep,
     InjectionScannerDep,
+    SecretRedactorDep,
 )
 from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
 
@@ -70,6 +71,7 @@ async def stats(
     cache_optimizer: CacheOptimizerDep,
     adaptive_controller: AdaptiveControllerDep,
     image_compressor: ImageCompressorDep,
+    secret_redactor: SecretRedactorDep,
 ) -> JSONResponse:
     """Aggregate runtime statistics.
 
@@ -90,6 +92,7 @@ async def stats(
             **cache_optimizer.stats(),
             **adaptive_controller.stats(),
             **image_compressor.stats(),
+            **secret_redactor.stats(),
         }
     )
 
