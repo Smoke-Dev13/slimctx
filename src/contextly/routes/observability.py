@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from contextly.dashboard import DASHBOARD_HTML
 from contextly.deps import (
     ABMonitorDep,
+    AdaptiveControllerDep,
     CacheOptimizerDep,
     ConfigDep,
     FailoverRouterDep,
@@ -66,6 +67,7 @@ async def stats(
     injection_scanner: InjectionScannerDep,
     failover_router: FailoverRouterDep,
     cache_optimizer: CacheOptimizerDep,
+    adaptive_controller: AdaptiveControllerDep,
 ) -> JSONResponse:
     """Aggregate runtime statistics.
 
@@ -84,6 +86,7 @@ async def stats(
             **injection_scanner.stats(),
             **failover_router.stats(),
             **cache_optimizer.stats(),
+            **adaptive_controller.stats(),
         }
     )
 

@@ -34,6 +34,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.controller import AdaptiveController
 from contextly.failover import FailoverRouter, FailoverTarget
 from contextly.gateway_stats import SQLiteStatsStore, default_stats_path
 from contextly.injection import InjectionScanner
@@ -175,6 +176,11 @@ def create_app(config: Config) -> FastAPI:
     app.state.injection_scanner = InjectionScanner()
     app.state.message_scorer = MessageScorer()
     app.state.cache_optimizer = CacheOptimizer()
+    app.state.adaptive_controller = AdaptiveController(
+        paradox_threshold=config.adaptive_paradox_threshold,
+        min_quality=config.adaptive_min_quality,
+        window=config.adaptive_window,
+    )
     primary = FailoverTarget(
         url=config.resolved_upstream_url(),
         api_key=config.upstream_api_key,
