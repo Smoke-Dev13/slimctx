@@ -18,6 +18,7 @@ from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.controller import AdaptiveController
 from contextly.failover import FailoverRouter
 from contextly.gateway_stats import SQLiteStatsStore
 from contextly.injection import InjectionScanner
@@ -76,6 +77,10 @@ def _get_cache_optimizer(request: Request) -> CacheOptimizer:
     return cast(CacheOptimizer, request.app.state.cache_optimizer)
 
 
+def _get_adaptive_controller(request: Request) -> AdaptiveController:
+    return cast(AdaptiveController, request.app.state.adaptive_controller)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -89,3 +94,4 @@ InjectionScannerDep = Annotated[InjectionScanner, Depends(_get_injection_scanner
 MessageScorerDep = Annotated[MessageScorer, Depends(_get_message_scorer)]
 FailoverRouterDep = Annotated[FailoverRouter, Depends(_get_failover_router)]
 CacheOptimizerDep = Annotated[CacheOptimizer, Depends(_get_cache_optimizer)]
+AdaptiveControllerDep = Annotated[AdaptiveController, Depends(_get_adaptive_controller)]

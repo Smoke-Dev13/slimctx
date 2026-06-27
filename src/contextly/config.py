@@ -131,6 +131,14 @@ class Config(BaseSettings):
     # the fresh tail, so the prompt-cache prefix stays byte-stable across turns.
     context_reorder_cache_stable: bool = True
 
+    # ── Adaptive compression controller ──────────────────────────────────────
+    # Closed-loop per-session tuning of the compressor chain based on measured
+    # response length, A/B quality, and cache hit rate.
+    adaptive_compression_enabled: bool = False
+    adaptive_paradox_threshold: float = 0.25
+    adaptive_min_quality: float = 0.6
+    adaptive_window: int = 8
+
     # ── Prompt-cache optimization ─────────────────────────────────────────────
     # Auto-inject Anthropic cache_control breakpoints and account for cache
     # savings on both OpenAI and Anthropic responses.

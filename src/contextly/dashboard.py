@@ -181,6 +181,11 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="value green" id="cache">—</div>
       <div class="card-sub" id="cache-sub">prompt cache</div>
     </div>
+    <div class="card" data-tip="Closed-loop compression tuning: step-ups / step-downs and verbosity spikes">
+      <div class="label">Adaptive control</div>
+      <div class="value" id="adaptive">—</div>
+      <div class="card-sub" id="adaptive-sub">spikes</div>
+    </div>
   </div>
 
   <div class="section">
@@ -364,6 +369,9 @@ async function tick() {
     $('injection').textContent = detected + ' / ' + blocked;
     $('cache').textContent = '$' + (s.cache_savings_dollars_total || 0).toFixed(4);
     $('cache-sub').textContent = fmt(s.cache_hit_tokens_total || 0) + ' cached tokens';
+    const ups = s.adaptive_stepups_total || 0, downs = s.adaptive_stepdowns_total || 0;
+    $('adaptive').textContent = '↑' + ups + ' ↓' + downs;
+    $('adaptive-sub').textContent = fmt(s.verbosity_spikes_total || 0) + ' verbosity spikes';
     const cRows = Object.entries(q.by_compressor || {});
     if (cRows.length) {
       $('byc-body').innerHTML = cRows

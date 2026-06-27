@@ -26,8 +26,10 @@ from contextly.ccr import CCRStore
 from contextly.ccr import content_key as _ccr_key
 from contextly.compressors.registry import ContentRouter
 from contextly.config import MODEL_CONTEXT_WINDOWS, Config
+from contextly.controller import session_key_from
 from contextly.deps import (
     ABMonitorDep,
+    AdaptiveControllerDep,
     AggressiveContentRouterDep,
     AuditWriterDep,
     CacheOptimizerDep,
@@ -324,6 +326,40 @@ def _account_cache_usage(
     return cache_optimizer.record_openai_usage(usage, price)
 
 
+def _extract_usage(resp: httpx.Response) -> tuple[int, int, int]:
+    """Return (completion_tokens, prompt_tokens, cached_tokens) from a response.
+
+    Handles OpenAI shapes; missing fields default to 0.
+    """
+    try:
+        usage = json.loads(resp.content).get("usage") or {}
+    except (ValueError, AttributeError):
+        return 0, 0, 0
+    if not isinstance(usage, dict):
+        return 0, 0, 0
+    completion = int(usage.get("completion_tokens", 0) or 0)
+    prompt = int(usage.get("prompt_tokens", 0) or 0)
+    details = usage.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
+    return completion, prompt, cached
+
+
+def _extract_system_prompt(payload: dict[str, Any]) -> str:
+    """Return the first system message's text, for session-key derivation."""
+    for msg in payload.get("messages", []):
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return " ".join(
+                    str(p.get("text", ""))
+                    for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+    return ""
+
+
 def _extract_last_user_query(payload: dict[str, Any]) -> str:
     """Extract the last user-role message text for query-aware compression."""
     for msg in reversed(payload.get("messages", [])):
@@ -353,6 +389,7 @@ async def chat_completions(
     message_scorer: MessageScorerDep,
     failover_router: FailoverRouterDep,
     cache_optimizer: CacheOptimizerDep,
+    adaptive_controller: AdaptiveControllerDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -395,10 +432,37 @@ async def chat_completions(
     active_router = _select_router(request, config, content_router, safe_content_router)
     mode_used = "off" if active_router is None else "default"
 
+    # Adaptive controller overrides the router choice when enabled and the caller
+    # has not pinned a mode via X-Contextly-Mode (off/safe always win).
+    explicit_mode = request.headers.get("X-Contextly-Mode", "").strip().lower()
+    session_key = ""
+    adaptive_level: str | None = None
+    if (
+        config.adaptive_compression_enabled
+        and active_router is not None
+        and explicit_mode not in {"off", "safe"}
+    ):
+        session_key = session_key_from(
+            request.headers.get("X-Contextly-Session"),
+            _extract_system_prompt(payload),
+        )
+        adaptive_level = adaptive_controller.choose(session_key)
+        active_router = {
+            "safe": safe_content_router,
+            "default": content_router,
+            "aggressive": aggressive_content_router,
+        }[adaptive_level]
+        mode_used = adaptive_level
+        response_headers_aggression = adaptive_level
+    else:
+        response_headers_aggression = None
+
     if audit_writer is not None:
         audit_writer.new_request()
 
     response_headers: dict[str, str] = {}
+    if response_headers_aggression is not None:
+        response_headers["X-Contextly-Aggression"] = response_headers_aggression
 
     if config.injection_detection_enabled:
         scan_result = injection_scanner.scan_messages(payload.get("messages", []))
@@ -567,6 +631,23 @@ async def chat_completions(
         tokens_saved_estimate=total_tokens_saved_estimate,
         dollars_saved=dollars_saved,
     )
+
+    # Feed the adaptive controller the measured outcome of this request.
+    if adaptive_level is not None and upstream_resp.status_code == 200:
+        completion_tokens, prompt_tokens, cached_tokens = _extract_usage(upstream_resp)
+        context_window = MODEL_CONTEXT_WINDOWS.get(model, 128_000)
+        context_fill = prompt_tokens / context_window if context_window else 0.0
+        quality_mean = ab_monitor.quality_report().get("quality")
+        quality_score = quality_mean.get("mean") if isinstance(quality_mean, dict) else None
+        spike = adaptive_controller.observe(
+            session_key,
+            aggression=adaptive_level,  # type: ignore[arg-type]
+            completion_tokens=completion_tokens,
+            quality_score=quality_score,
+            cached_tokens=cached_tokens,
+            context_fill=context_fill,
+        )
+        extra_headers["X-Contextly-Verbosity-Spike"] = str(spike).lower()
 
     chars_saved = total_original_chars - total_compressed_chars
     if (
