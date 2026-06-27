@@ -38,6 +38,7 @@ from contextly.deps import (
     ContentRouterDep,
     FailoverRouterDep,
     HttpClientDep,
+    ImageCompressorDep,
     InjectionScannerDep,
     MessageScorerDep,
     SafeContentRouterDep,
@@ -204,6 +205,7 @@ def _compress_messages(
     dedup_min_chars: int = 200,
     model: str = "unknown",
     audit_writer: Any = None,
+    image_compressor: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
     """Compress each message's text, returning new messages, totals, and CCR keys.
 
@@ -218,6 +220,7 @@ def _compress_messages(
     """
     out: list[dict[str, Any]] = []
     orig = comp = saved = 0
+    img_parts = 0
     dominant = "passthrough"
     ccr_keys: dict[str, str] = {}
     seen_hashes: dict[str, str] = {}  # sha_key → slot label of first occurrence
@@ -287,6 +290,12 @@ def _compress_messages(
                     and part["text"]
                 ):
                     parts.append({**part, "text": _do(part["text"], f"msg:{i}:{j}")})
+                elif image_compressor is not None and isinstance(part, dict):
+                    img_result = image_compressor.compress_part(part, query)
+                    if img_result.changed:
+                        img_parts += 1
+                        saved += img_result.tokens_saved_estimate
+                    parts.append(img_result.part)
                 else:
                     parts.append(part)
             out.append({**msg, "content": parts})
@@ -298,6 +307,7 @@ def _compress_messages(
         "compressed_chars": comp,
         "tokens_saved": saved,
         "dominant": dominant,
+        "image_parts_compressed": img_parts,
     }
     return out, totals, ccr_keys
 
@@ -390,6 +400,7 @@ async def chat_completions(
     failover_router: FailoverRouterDep,
     cache_optimizer: CacheOptimizerDep,
     adaptive_controller: AdaptiveControllerDep,
+    image_compressor: ImageCompressorDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -491,6 +502,7 @@ async def chat_completions(
             dedup_min_chars=config.dedup_min_chars,
             model=model,
             audit_writer=audit_writer,
+            image_compressor=image_compressor if config.image_compression_enabled else None,
         )
         total_original_chars = totals["original_chars"]
         total_compressed_chars = totals["compressed_chars"]

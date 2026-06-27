@@ -27,9 +27,12 @@ from contextly.ab_monitor import ABMonitor
 from contextly.audit import AuditWriter
 from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore, SQLiteCCRStore
+from contextly.compressors.base import Compressor
 from contextly.compressors.code import CodeCompressor
+from contextly.compressors.image import ImageCompressor
 from contextly.compressors.json_smart import JsonSmartCompressor
 from contextly.compressors.json_table import JsonTableCompressor
+from contextly.compressors.llmlingua import LLMLinguaCompressor
 from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
@@ -117,7 +120,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def _build_router(
-    compression_enabled: bool, *, safe: bool, aggressive: bool = False
+    compression_enabled: bool,
+    *,
+    safe: bool,
+    aggressive: bool = False,
+    ml_compressor: Compressor | None = None,
 ) -> ContentRouter:
     """Build a content router.
 
@@ -125,7 +132,8 @@ def _build_router(
     compressors — log folding and prose sentence-dropping — are added only when
     not ``safe``. The aggressive chain additionally enables json_smart record
     sampling; it is used only by budget enforcement when context would otherwise
-    overflow.
+    overflow. When ``ml_compressor`` is supplied it is registered ahead of prose
+    so neural compression wins for prose-like text.
     """
     router = ContentRouter()
     if compression_enabled:
@@ -133,6 +141,8 @@ def _build_router(
         router.register(CodeCompressor())
         if not safe:
             router.register(LogCompressor())
+            if ml_compressor is not None:
+                router.register(ml_compressor)
             router.register(ProseCompressor())
             if aggressive:
                 router.register(JsonSmartCompressor())
@@ -157,12 +167,23 @@ def create_app(config: Config) -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.config = config
+    # Neural compressor is constructed only when enabled; the heavy LLMLingua /
+    # torch import stays lazy inside the compressor until first use.
+    ml_compressor: Compressor | None = None
+    if config.ml_compression_enabled:
+        ml_compressor = LLMLinguaCompressor(model_name=config.ml_compression_model)
     # Two routers are kept so a request can override the global mode per call via
     # the X-Contextly-Mode header: the default chain and a lossless "safe" chain.
-    app.state.content_router = _build_router(config.compression_enabled, safe=config.safe_mode)
+    app.state.content_router = _build_router(
+        config.compression_enabled, safe=config.safe_mode, ml_compressor=ml_compressor
+    )
     app.state.content_router_safe = _build_router(config.compression_enabled, safe=True)
     app.state.content_router_aggressive = _build_router(
-        config.compression_enabled, safe=False, aggressive=True
+        config.compression_enabled, safe=False, aggressive=True, ml_compressor=ml_compressor
+    )
+    app.state.image_compressor = ImageCompressor(
+        detail_level=config.image_detail_level,
+        max_dimension=config.image_max_dimension,
     )
     app.state.ccr_store = (
         SQLiteCCRStore(config.ccr_path) if config.ccr_backend == "sqlite" else CCRStore()

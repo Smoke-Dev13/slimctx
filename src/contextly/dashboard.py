@@ -186,6 +186,11 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="value" id="adaptive">—</div>
       <div class="card-sub" id="adaptive-sub">spikes</div>
     </div>
+    <div class="card" data-tip="Image parts compressed (detail downgrade / downscale)">
+      <div class="label">Images compressed</div>
+      <div class="value blue" id="images">—</div>
+      <div class="card-sub">multimodal</div>
+    </div>
   </div>
 
   <div class="section">
@@ -372,6 +377,7 @@ async function tick() {
     const ups = s.adaptive_stepups_total || 0, downs = s.adaptive_stepdowns_total || 0;
     $('adaptive').textContent = '↑' + ups + ' ↓' + downs;
     $('adaptive-sub').textContent = fmt(s.verbosity_spikes_total || 0) + ' verbosity spikes';
+    $('images').textContent = fmt(s.image_parts_compressed_total || 0);
     const cRows = Object.entries(q.by_compressor || {});
     if (cRows.length) {
       $('byc-body').innerHTML = cRows

@@ -131,6 +131,19 @@ class Config(BaseSettings):
     # the fresh tail, so the prompt-cache prefix stays byte-stable across turns.
     context_reorder_cache_stable: bool = True
 
+    # ── ML compression (optional, heavy deps) ─────────────────────────────────
+    # Neural extractive compression via LLMLingua-2. Requires the `ml` extra;
+    # when the dependency is absent the compressor is simply never selected.
+    ml_compression_enabled: bool = False
+    ml_compression_model: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
+
+    # ── Image compression (multimodal) ────────────────────────────────────────
+    # Downgrade image detail (and optionally downscale inline images) to cut the
+    # token cost of vision inputs. Pillow (the `image` extra) enables downscale.
+    image_compression_enabled: bool = False
+    image_detail_level: Literal["low", "auto"] = "low"
+    image_max_dimension: int = 512
+
     # ── Adaptive compression controller ──────────────────────────────────────
     # Closed-loop per-session tuning of the compressor chain based on measured
     # response length, A/B quality, and cache hit rate.

@@ -21,6 +21,7 @@ from contextly.deps import (
     ConfigDep,
     FailoverRouterDep,
     GatewayStatsDep,
+    ImageCompressorDep,
     InjectionScannerDep,
 )
 from contextly.metrics import CONTENT_TYPE_LATEST, get_metrics_bytes
@@ -68,6 +69,7 @@ async def stats(
     failover_router: FailoverRouterDep,
     cache_optimizer: CacheOptimizerDep,
     adaptive_controller: AdaptiveControllerDep,
+    image_compressor: ImageCompressorDep,
 ) -> JSONResponse:
     """Aggregate runtime statistics.
 
@@ -87,6 +89,7 @@ async def stats(
             **failover_router.stats(),
             **cache_optimizer.stats(),
             **adaptive_controller.stats(),
+            **image_compressor.stats(),
         }
     )
 
