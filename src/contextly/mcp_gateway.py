@@ -142,6 +142,7 @@ class ToolCompressorRegistry:
     def routing_table(self) -> dict[str, Any]:
         """Return a snapshot of the current learned routing for /gateway-routing."""
         import time as _time
+
         return {
             "learned": dict(self._learned),
             "call_counts": dict(self._call_counts),
@@ -266,7 +267,7 @@ def build_gateway_server(
                                     saved = round(100 * (1 - lr.compression_ratio))
                                     note = (
                                         f"\n\n[contextly] Output compressed ~{saved}% "
-                                        f'(learned:{learned.name}). '
+                                        f"(learned:{learned.name}). "
                                         f'Call {_EXPAND_TOOL_NAME}("{ref}") for full original.'
                                     )
                                     compressed = lr.content + note

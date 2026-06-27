@@ -398,7 +398,10 @@ async def chat_completions(
                     (aggressive_content_router, "aggressive"),
                 ):
                     esc_msgs, esc_totals, esc_keys = _compress_messages(
-                        messages, query, escalation_router, ccr_store,
+                        messages,
+                        query,
+                        escalation_router,
+                        ccr_store,
                         dedup_enabled=config.dedup_enabled,
                         dedup_min_chars=config.dedup_min_chars,
                         model=model,
