@@ -101,7 +101,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ANN", "N802", "N803"]
+"tests/**" = ["S101", "S105", "S106", "ANN", "N802", "N803"]
 # Dashboard files embed inline HTML/CSS/JS strings that cannot be wrapped at 100 chars.
 "src/contextly/dashboard.py" = ["E501"]
 "src/contextly/gateway_dashboard.py" = ["E501"]

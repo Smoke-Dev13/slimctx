@@ -163,6 +163,13 @@ class Config(BaseSettings):
     injection_detection_enabled: bool = False
     injection_block_threshold: float | None = None
 
+    # ── Semantic firewall (outbound secret / PII redaction) ───────────────────
+    # Redact API keys, private keys, cards, SSNs, emails before they reach the
+    # upstream LLM. ``reversible`` stores originals in the CCR store (opt-in).
+    firewall_enabled: bool = False
+    firewall_block_on_secret: bool = False
+    firewall_reversible: bool = False
+
     # ── Multi-model failover ─────────────────────────────────────────────────
     # Ordered list of fallback upstreams. Each entry: {"url": "...", "api_key": "...",
     # "provider": "openrouter"}. Primary upstream is always tried first; these are
