@@ -25,6 +25,7 @@ from prometheus_client import (
 
 __all__ = [
     "CONTENT_TYPE_LATEST",
+    "DOLLARS_SAVED_TOTAL",
     "TOKENS_SAVED_TOTAL",
     "get_metrics_bytes",
     "observe_ab_sample",
@@ -66,6 +67,12 @@ TOKENS_SAVED_TOTAL: Any = Counter(
     ["compressor"],
 )
 
+DOLLARS_SAVED_TOTAL: Any = Counter(
+    "contextly_dollars_saved_total",
+    "Cumulative estimated USD saved by compression (tokens_saved × price/token).",
+    ["model", "compressor"],
+)
+
 AB_QUALITY_SCORE: Any = Histogram(
     "contextly_ab_quality_score",
     "A/B shadow quality score (word-level ROUGE-1 F1) per sampled request. "
@@ -86,6 +93,7 @@ def observe_request(
     compressed_chars: int,
     latency_seconds: float,
     tokens_saved_estimate: int = 0,
+    dollars_saved: float = 0.0,
 ) -> None:
     """Update all request-level Prometheus metrics for one proxied request.
 
@@ -96,6 +104,7 @@ def observe_request(
         compressed_chars: Total chars after compression.
         latency_seconds: Wall-clock seconds from request start to upstream reply.
         tokens_saved_estimate: Estimated tokens saved (chars // 4 when exact count unavailable).
+        dollars_saved: Estimated USD saved (tokens_saved × model price/token).
     """
     REQUESTS_TOTAL.labels(model=model, compressor=compressor).inc()
 
@@ -105,6 +114,9 @@ def observe_request(
 
     if tokens_saved_estimate > 0:
         TOKENS_SAVED_TOTAL.labels(compressor=compressor).inc(tokens_saved_estimate)
+
+    if dollars_saved > 0:
+        DOLLARS_SAVED_TOTAL.labels(model=model, compressor=compressor).inc(dollars_saved)
 
     if original_chars > 0:
         ratio = compressed_chars / original_chars

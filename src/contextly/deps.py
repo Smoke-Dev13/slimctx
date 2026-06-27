@@ -13,6 +13,7 @@ import httpx
 from fastapi import Depends, Request
 
 from contextly.ab_monitor import ABMonitor
+from contextly.audit import AuditWriter
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
@@ -47,10 +48,20 @@ def _get_gateway_stats(request: Request) -> SQLiteStatsStore:
     return cast(SQLiteStatsStore, request.app.state.gateway_stats)
 
 
+def _get_aggressive_content_router(request: Request) -> ContentRouter:
+    return cast(ContentRouter, request.app.state.content_router_aggressive)
+
+
+def _get_audit_writer(request: Request) -> AuditWriter | None:
+    return cast(AuditWriter | None, getattr(request.app.state, "audit_writer", None))
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
 SafeContentRouterDep = Annotated[ContentRouter, Depends(_get_safe_content_router)]
+AggressiveContentRouterDep = Annotated[ContentRouter, Depends(_get_aggressive_content_router)]
 CCRDep = Annotated[CCRStore, Depends(_get_ccr_store)]
 ABMonitorDep = Annotated[ABMonitor, Depends(_get_ab_monitor)]
 GatewayStatsDep = Annotated[SQLiteStatsStore, Depends(_get_gateway_stats)]
+AuditWriterDep = Annotated[AuditWriter | None, Depends(_get_audit_writer)]

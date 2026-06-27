@@ -185,6 +185,7 @@ class ABMonitor:
         self._total_original_chars: int = 0
         self._total_compressed_chars: int = 0
         self._total_tokens_saved: int = 0
+        self._total_dollars_saved: float = 0.0
 
     # ── Recording ─────────────────────────────────────────────────────────────
 
@@ -194,6 +195,7 @@ class ABMonitor:
         compressed_chars: int,
         compressor_name: str,
         tokens_saved_estimate: int = 0,
+        dollars_saved: float = 0.0,
     ) -> None:
         """Update running counters for a single chat/completions request.
 
@@ -205,6 +207,7 @@ class ABMonitor:
             compressed_chars: Total character length of compressed messages.
             compressor_name: Name of the compressor that did the most work.
             tokens_saved_estimate: Estimated tokens saved (chars // 4 heuristic).
+            dollars_saved: Estimated USD saved for this request.
         """
         _ = compressor_name  # reserved for future per-compressor counters
         with self._lock:
@@ -214,6 +217,7 @@ class ABMonitor:
             self._total_original_chars += original_chars
             self._total_compressed_chars += compressed_chars
             self._total_tokens_saved += tokens_saved_estimate
+            self._total_dollars_saved += dollars_saved
 
     def record_sample(self, sample: ABSample) -> None:
         """Append an A/B comparison result to the ring buffer.
@@ -248,6 +252,7 @@ class ABMonitor:
             orig_chars = self._total_original_chars
             comp_chars = self._total_compressed_chars
             tokens_saved = self._total_tokens_saved
+            dollars_saved = self._total_dollars_saved
             n_samples = len(self._samples)
 
         chars_saved = orig_chars - comp_chars
@@ -257,6 +262,7 @@ class ABMonitor:
             "requests_compressed": compressed,
             "chars_saved_total": chars_saved,
             "tokens_saved_estimate_total": tokens_saved,
+            "dollars_saved_total": round(dollars_saved, 6),
             "compression_ratio_mean": ratio,
             "ab_samples_total": n_samples,
         }

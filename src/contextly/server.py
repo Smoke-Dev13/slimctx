@@ -24,8 +24,10 @@ import uvicorn
 from fastapi import FastAPI
 
 from contextly.ab_monitor import ABMonitor
+from contextly.audit import AuditWriter
 from contextly.ccr import CCRStore, SQLiteCCRStore
 from contextly.compressors.code import CodeCompressor
+from contextly.compressors.json_smart import JsonSmartCompressor
 from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
@@ -109,13 +111,14 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("contextly_stopped")
 
 
-def _build_router(compression_enabled: bool, *, safe: bool) -> ContentRouter:
+def _build_router(compression_enabled: bool, *, safe: bool, aggressive: bool = False) -> ContentRouter:
     """Build a content router.
 
     json_table (lossless JSON) and code compression run in every mode. The lossy
     compressors — log folding and prose sentence-dropping — are added only when
-    not ``safe``. The lossy json_smart record sampler is never auto-registered;
-    opt into it explicitly when a representative sample is enough.
+    not ``safe``. The aggressive chain additionally enables json_smart record
+    sampling; it is used only by budget enforcement when context would otherwise
+    overflow.
     """
     router = ContentRouter()
     if compression_enabled:
@@ -124,6 +127,8 @@ def _build_router(compression_enabled: bool, *, safe: bool) -> ContentRouter:
         if not safe:
             router.register(LogCompressor())
             router.register(ProseCompressor())
+            if aggressive:
+                router.register(JsonSmartCompressor())
     return router
 
 
@@ -149,6 +154,9 @@ def create_app(config: Config) -> FastAPI:
     # the X-Contextly-Mode header: the default chain and a lossless "safe" chain.
     app.state.content_router = _build_router(config.compression_enabled, safe=config.safe_mode)
     app.state.content_router_safe = _build_router(config.compression_enabled, safe=True)
+    app.state.content_router_aggressive = _build_router(
+        config.compression_enabled, safe=False, aggressive=True
+    )
     app.state.ccr_store = (
         SQLiteCCRStore(config.ccr_path) if config.ccr_backend == "sqlite" else CCRStore()
     )
@@ -157,6 +165,7 @@ def create_app(config: Config) -> FastAPI:
     # dashboard can surface gateway savings alongside its own (server label "" —
     # snapshot() aggregates every server that wrote to the file).
     app.state.gateway_stats = SQLiteStatsStore(config.gateway_stats_path or default_stats_path())
+    app.state.audit_writer = AuditWriter(config.audit_log_path) if config.audit_log_path else None
     app.include_router(obs_router)
     app.include_router(openai_router)
     return app

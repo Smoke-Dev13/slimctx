@@ -29,12 +29,14 @@ from __future__ import annotations
 import base64
 import sys
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import structlog
 from pydantic import AnyUrl
 
 from contextly.ccr import CCRStore
+from contextly.compressors.base import Compressor
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.logs import LogCompressor
@@ -59,6 +61,93 @@ except ImportError as _err:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 _EXPAND_TOOL_NAME = "contextly_expand"
+
+# Number of warm-up calls before a tool's preferred compressor is locked in.
+_TOOL_LEARNING_CALLS = 5
+
+
+class ToolCompressorRegistry:
+    """Per-tool compressor learning registry for the MCP gateway.
+
+    During the first ``learning_calls`` invocations of each tool, all
+    compressors are benchmarked on the actual output and the one that
+    achieves the best compression ratio is stored as the preferred choice.
+    After that, subsequent calls skip the routing heuristics and jump
+    directly to the learned compressor — saving CPU and giving better ratios.
+
+    Overrides can be supplied via ``CONTEXTLY_TOOL_COMPRESSORS=tool:name,...``
+    (parsed from env before the gateway starts) to pin a compressor without
+    waiting for the learning phase.
+    """
+
+    def __init__(
+        self,
+        compressors: list[Compressor],
+        learning_calls: int = _TOOL_LEARNING_CALLS,
+        overrides: dict[str, str] | None = None,
+    ) -> None:
+        self._compressors: dict[str, Compressor] = {c.name: c for c in compressors}
+        self._learning_calls = learning_calls
+        self._call_counts: dict[str, int] = {}
+        self._ratio_sums: dict[str, dict[str, float]] = {}  # tool → {compressor_name → sum}
+        self._learned: dict[str, str] = {}  # tool → best compressor name
+        # Apply static overrides immediately (skips learning phase)
+        for tool_name, comp_name in (overrides or {}).items():
+            if comp_name in self._compressors:
+                self._learned[tool_name] = comp_name
+                logger.info("tool_compressor_pinned", tool=tool_name, compressor=comp_name)
+
+    def select(self, tool_name: str, text: str) -> Compressor:
+        """Return the best compressor for *tool_name* given *text*.
+
+        During learning, tries all compressors on the text and picks the one
+        with the lowest ratio. After learning is complete, returns the winner
+        directly without re-benchmarking.
+        """
+        # Already learned → fast path
+        if tool_name in self._learned:
+            comp_name = self._learned[tool_name]
+            return self._compressors.get(comp_name, next(iter(self._compressors.values())))
+
+        # Warm-up: benchmark all compressors, accumulate ratio sums
+        self._call_counts[tool_name] = self._call_counts.get(tool_name, 0) + 1
+        sums = self._ratio_sums.setdefault(tool_name, {})
+        best_comp: Compressor | None = None
+        best_ratio = 1.0
+        for comp in self._compressors.values():
+            try:
+                result = comp.compress(text)
+                ratio = result.compression_ratio
+            except Exception:
+                ratio = 1.0
+            sums[comp.name] = sums.get(comp.name, 0.0) + ratio
+            if ratio < best_ratio:
+                best_ratio = ratio
+                best_comp = comp
+
+        if self._call_counts[tool_name] >= self._learning_calls:
+            # Lock in the compressor with the lowest average ratio
+            winner = min(sums, key=lambda n: sums[n])
+            self._learned[tool_name] = winner
+            logger.info(
+                "tool_compressor_learned",
+                tool=tool_name,
+                winner=winner,
+                calls=self._call_counts[tool_name],
+                avg_ratio=round(sums[winner] / self._call_counts[tool_name], 3),
+            )
+
+        return best_comp or next(iter(self._compressors.values()))
+
+    def routing_table(self) -> dict[str, Any]:
+        """Return a snapshot of the current learned routing for /gateway-routing."""
+        import time as _time
+        return {
+            "learned": dict(self._learned),
+            "call_counts": dict(self._call_counts),
+            "learning_calls_required": self._learning_calls,
+            "ts": round(_time.time(), 1),
+        }
 
 
 def build_router() -> ContentRouter:
@@ -111,6 +200,7 @@ def build_gateway_server(
     forward_resources: bool = False,
     forward_prompts: bool = False,
     stats: StatsRecorder | None = None,
+    tool_registry: ToolCompressorRegistry | None = None,
 ) -> Server:
     """Build the proxy MCP server that wraps *session* (the downstream server).
 
@@ -162,7 +252,30 @@ def build_gateway_server(
                 # Compression is best-effort: a compressor fault must never turn a
                 # working tool into a failing one, so fall back to the raw text.
                 try:
-                    compressed, _ref = compress_payload(block.text, router, store)
+                    if tool_registry is not None and block.text.strip():
+                        learned = tool_registry.select(name, block.text)
+                        # Wrap the learned compressor in a single-item router
+                        text = block.text
+                        try:
+                            lr = learned.compress(text)
+                            if lr.compression_ratio < 1.0:
+                                if lr.metadata.get("lossless"):
+                                    compressed = lr.content
+                                else:
+                                    ref = store.store(text)
+                                    saved = round(100 * (1 - lr.compression_ratio))
+                                    note = (
+                                        f"\n\n[contextly] Output compressed ~{saved}% "
+                                        f'(learned:{learned.name}). '
+                                        f'Call {_EXPAND_TOOL_NAME}("{ref}") for full original.'
+                                    )
+                                    compressed = lr.content + note
+                            else:
+                                compressed, _ = compress_payload(block.text, router, store)
+                        except Exception:
+                            compressed, _ = compress_payload(block.text, router, store)
+                    else:
+                        compressed, _ref = compress_payload(block.text, router, store)
                 except Exception:
                     logger.warning("gateway_compress_failed", tool=name, exc_info=True)
                     compressed = block.text
@@ -255,6 +368,7 @@ async def run_gateway(
     server_name: str = "",
     stats_path: str | None = None,
     stats: StatsRecorder | None = None,
+    tool_compressor_overrides: dict[str, str] | None = None,
 ) -> None:
     """Launch the downstream MCP server and serve the gateway over stdio.
 
@@ -275,6 +389,10 @@ async def run_gateway(
     router = build_router()
     server_name = server_name or derive_server_name(command, args)
     stats = stats or SQLiteStatsStore(stats_path or default_stats_path(), server_name)
+    tool_registry = ToolCompressorRegistry(
+        [JsonTableCompressor(), CodeCompressor(), LogCompressor(), ProseCompressor()],
+        overrides=tool_compressor_overrides,
+    )
     if dashboard_port:
         from contextly.gateway_dashboard import start_dashboard
 
@@ -297,6 +415,7 @@ async def run_gateway(
                 forward_resources=caps.resources is not None,
                 forward_prompts=caps.prompts is not None,
                 stats=stats,
+                tool_registry=tool_registry,
             )
             async with stdio_server() as (read, write):
                 await server.run(read, write, server.create_initialization_options())

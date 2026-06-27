@@ -24,8 +24,12 @@ from contextly.ab_monitor import _extract_response_text, run_shadow_ab
 from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
+from contextly.ccr import content_key as _ccr_key
+from contextly.config import MODEL_CONTEXT_WINDOWS
 from contextly.deps import (
     ABMonitorDep,
+    AggressiveContentRouterDep,
+    AuditWriterDep,
     CCRDep,
     ConfigDep,
     ContentRouterDep,
@@ -34,6 +38,7 @@ from contextly.deps import (
 )
 from contextly.expand import filter_original
 from contextly.metrics import observe_request
+from contextly.pricing import tokens_to_dollars
 
 # Keeps strong references to background tasks so they aren't GC'd before completion.
 _background_tasks: set[asyncio.Task[None]] = set()
@@ -66,6 +71,101 @@ async def _proxy_stream(
             yield chunk
 
 
+async def _compress_stream(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    ccr_store: CCRStore,
+    router: ContentRouter,
+    flush_sentences: int = 3,
+) -> AsyncGenerator[bytes, None]:
+    """SSE-aware streaming with compression of tool-call arguments.
+
+    Parses SSE ``data:`` frames as they arrive. When a tool-call delta stream
+    completes (signalled by ``finish_reason: "tool_calls"``), the accumulated
+    JSON arguments are compressed and the CCR key is injected into a synthetic
+    ``data: [CONTEXTLY_KEYS ...]`` comment before ``data: [DONE]``.
+
+    For regular assistant text, a sliding-window sentence buffer flushes
+    compressed output every *flush_sentences* sentences rather than buffering
+    the whole response.
+    """
+    tool_args_buf: dict[int, str] = {}  # index → accumulated function.arguments
+    tool_ccr_keys: dict[str, str] = {}  # "tool:{index}" → ccr_key
+    text_buf: list[str] = []
+    sentence_count = 0
+    query = _extract_last_user_query(payload)
+
+    def _flush_text() -> bytes:
+        nonlocal sentence_count
+        combined = "".join(text_buf)
+        text_buf.clear()
+        sentence_count = 0
+        if not combined:
+            return b""
+        result = router.select(combined, query).compress(combined, query)
+        return result.content.encode()
+
+    async with client.stream("POST", url, headers=headers, json=payload) as response:
+        async for raw_chunk in response.aiter_bytes():
+            for line in raw_chunk.split(b"\n"):
+                if not line.startswith(b"data: "):
+                    yield line + b"\n"
+                    continue
+                data_str = line[6:].decode("utf-8", errors="replace").strip()
+                if data_str == "[DONE]":
+                    # Flush any remaining text buffer
+                    leftover = _flush_text()
+                    if leftover:
+                        yield b"data: " + leftover + b"\n\n"
+                    # Compress accumulated tool-call arguments
+                    for idx, args_str in tool_args_buf.items():
+                        if not args_str:
+                            continue
+                        result = router.select(args_str, query).compress(args_str, query)
+                        if result.compression_ratio < 1.0:
+                            key = ccr_store.store(args_str)
+                            tool_ccr_keys[f"tool:{idx}"] = key
+                    if tool_ccr_keys:
+                        keys_json = json.dumps(tool_ccr_keys)
+                        yield f"data: [CONTEXTLY_KEYS {keys_json}]\n\n".encode()
+                    yield b"data: [DONE]\n\n"
+                    return
+                try:
+                    chunk_obj: dict[str, Any] = json.loads(data_str)
+                except (json.JSONDecodeError, ValueError):
+                    yield line + b"\n"
+                    continue
+
+                # Track tool-call argument deltas
+                for choice in chunk_obj.get("choices", []):
+                    delta = choice.get("delta", {})
+                    for tc in delta.get("tool_calls", []):
+                        idx = tc.get("index", 0)
+                        fn_args = tc.get("function", {}).get("arguments", "")
+                        if fn_args:
+                            tool_args_buf[idx] = tool_args_buf.get(idx, "") + fn_args
+
+                    # Track assistant text for sentence-window flushing
+                    content_delta = delta.get("content") or ""
+                    if content_delta:
+                        text_buf.append(content_delta)
+                        sentence_count += content_delta.count(".")
+                        if sentence_count >= flush_sentences:
+                            compressed = _flush_text()
+                            if compressed:
+                                synthetic = dict(chunk_obj)
+                                synthetic["choices"] = [
+                                    {**c, "delta": {"content": compressed.decode()}}
+                                    for c in chunk_obj.get("choices", [])
+                                ]
+                                yield b"data: " + json.dumps(synthetic).encode() + b"\n\n"
+                            continue
+
+                yield b"data: " + json.dumps(chunk_obj).encode() + b"\n\n"
+
+
 def _select_router(
     request: Request,
     config: Config,
@@ -93,27 +193,78 @@ def _compress_messages(
     query: str,
     router: ContentRouter,
     ccr_store: CCRStore,
+    *,
+    dedup_enabled: bool = True,
+    dedup_min_chars: int = 200,
+    model: str = "unknown",
+    audit_writer: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
     """Compress each message's text, returning new messages, totals, and CCR keys.
 
     Handles both string content and OpenAI/Anthropic content-block lists (only
     ``{"type": "text", "text": ...}`` parts are compressed). Originals are stored
     in the CCR store whenever compression reduced the text.
+
+    Cross-message deduplication: when dedup_enabled is True and a content block
+    is identical to one seen earlier in the same request (by SHA key), it is
+    replaced with a sentinel referencing the first occurrence's CCR key instead
+    of being compressed again — saving all of its tokens at zero quality risk.
     """
     out: list[dict[str, Any]] = []
     orig = comp = saved = 0
     dominant = "passthrough"
     ccr_keys: dict[str, str] = {}
+    seen_hashes: dict[str, str] = {}  # sha_key → slot label of first occurrence
 
-    def _do(text: str, key: str) -> str:
+    def _do(text: str, slot: str) -> str:
         nonlocal orig, comp, saved, dominant
+
+        # Cross-message deduplication — exact duplicates need zero inference tokens
+        if dedup_enabled and len(text) >= dedup_min_chars:
+            sha = _ccr_key(text)
+            if sha in seen_hashes:
+                first_slot = seen_hashes[sha]
+                stored_key = ccr_store.store(text)
+                ccr_keys[slot] = stored_key
+                sentinel = (
+                    f"[duplicate of {first_slot} — identical content omitted to save tokens; "
+                    f'contextly_expand("{stored_key}") to recover]'
+                )
+                orig += len(text)
+                comp += len(sentinel)
+                saved += max(0, (len(text) - len(sentinel)) // 4)
+                dominant = "dedup"
+                if audit_writer is not None:
+                    audit_writer.record(
+                        model=model,
+                        msg_index=slot,
+                        ccr_key=stored_key,
+                        compressor="dedup",
+                        original_chars=len(text),
+                        compressed_chars=len(sentinel),
+                        deduped=True,
+                    )
+                return sentinel
+            seen_hashes[sha] = slot
+
         result = router.select(text, query).compress(text, query)
         orig += result.original_length
         comp += result.compressed_length
         saved += result.tokens_saved_estimate
+        stored_key: str | None = None
         if result.compression_ratio < 1.0:
             dominant = result.compressor_name
-            ccr_keys[key] = ccr_store.store(text)
+            stored_key = ccr_store.store(text)
+            ccr_keys[slot] = stored_key
+        if audit_writer is not None:
+            audit_writer.record(
+                model=model,
+                msg_index=slot,
+                ccr_key=stored_key,
+                compressor=result.compressor_name,
+                original_chars=result.original_length,
+                compressed_chars=result.compressed_length,
+            )
         return result.content
 
     for i, msg in enumerate(messages):
@@ -166,8 +317,10 @@ async def chat_completions(
     http_client: HttpClientDep,
     content_router: ContentRouterDep,
     safe_content_router: SafeContentRouterDep,
+    aggressive_content_router: AggressiveContentRouterDep,
     ccr_store: CCRDep,
     ab_monitor: ABMonitorDep,
+    audit_writer: AuditWriterDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -207,17 +360,75 @@ async def chat_completions(
     dominant_compressor: str = "passthrough"
     ccr_keys: dict[str, str] = {}
 
-    router = _select_router(request, config, content_router, safe_content_router)
-    if router is not None:
+    active_router = _select_router(request, config, content_router, safe_content_router)
+    mode_used = "off" if active_router is None else "default"
+
+    if audit_writer is not None:
+        audit_writer.new_request()
+
+    if active_router is not None:
         query = _extract_last_user_query(payload)
+        messages = payload.get("messages", [])
         compressed_messages, totals, ccr_keys = _compress_messages(
-            payload.get("messages", []), query, router, ccr_store
+            messages,
+            query,
+            active_router,
+            ccr_store,
+            dedup_enabled=config.dedup_enabled,
+            dedup_min_chars=config.dedup_min_chars,
+            model=model,
+            audit_writer=audit_writer,
         )
         total_original_chars = totals["original_chars"]
         total_compressed_chars = totals["compressed_chars"]
         total_tokens_saved_estimate = totals["tokens_saved"]
         dominant_compressor = totals["dominant"]
         payload = {**payload, "messages": compressed_messages}
+
+        # Budget enforcement: escalate compressor chain if estimated tokens
+        # would overflow the model's context window.
+        if config.budget_enforcement:
+            context_window = MODEL_CONTEXT_WINDOWS.get(model, 128_000)
+            max_output = int(payload.get("max_tokens") or 4096)
+            safety_margin = 512
+            estimated_input = total_compressed_chars // 4
+            if estimated_input + max_output + safety_margin > context_window:
+                # Try safe router first, then aggressive
+                for escalation_router, escalation_name in (
+                    (safe_content_router, "safe"),
+                    (aggressive_content_router, "aggressive"),
+                ):
+                    esc_msgs, esc_totals, esc_keys = _compress_messages(
+                        messages, query, escalation_router, ccr_store,
+                        dedup_enabled=config.dedup_enabled,
+                        dedup_min_chars=config.dedup_min_chars,
+                        model=model,
+                    )
+                    est = esc_totals["compressed_chars"] // 4
+                    if est + max_output + safety_margin <= context_window:
+                        compressed_messages, totals, ccr_keys = esc_msgs, esc_totals, esc_keys
+                        total_compressed_chars = esc_totals["compressed_chars"]
+                        total_tokens_saved_estimate = esc_totals["tokens_saved"]
+                        dominant_compressor = esc_totals["dominant"]
+                        payload = {**payload, "messages": compressed_messages}
+                        mode_used = escalation_name
+                        log.info(
+                            "budget_enforcement_escalated",
+                            chain=escalation_name,
+                            estimated_tokens=est,
+                            context_window=context_window,
+                        )
+                        break
+                else:
+                    log.warning(
+                        "budget_enforcement_overflow",
+                        estimated_tokens=total_compressed_chars // 4,
+                        context_window=context_window,
+                    )
+
+    dollars_saved = tokens_to_dollars(
+        total_tokens_saved_estimate, model, config.pricing_overrides or {}
+    )
 
     if total_original_chars > 0:
         if config.target_token_budget is not None:
@@ -233,12 +444,14 @@ async def chat_completions(
             compressed_chars=total_compressed_chars,
             compressor_name=dominant_compressor,
             tokens_saved_estimate=total_tokens_saved_estimate,
+            dollars_saved=dollars_saved,
         )
 
     upstream_url = f"{config.resolved_upstream_url()}/v1/chat/completions"
     headers = _build_upstream_headers(request, config.upstream_api_key)
     extra_headers: dict[str, str] = {
         "X-Contextly-Compressed": str(config.compression_enabled).lower(),
+        "X-Contextly-Mode-Used": mode_used,
     }
     if ccr_keys:
         extra_headers["X-Contextly-CCR-Keys"] = json.dumps(ccr_keys)
@@ -246,8 +459,20 @@ async def chat_completions(
     if is_streaming:
         # A/B monitoring skipped for streaming — buffering the response would
         # defeat the purpose of streaming.
+        if config.stream_compression_enabled and active_router is not None:
+            stream_gen = _compress_stream(
+                http_client,
+                upstream_url,
+                headers,
+                payload,
+                ccr_store,
+                active_router,
+                flush_sentences=config.stream_flush_sentences,
+            )
+        else:
+            stream_gen = _proxy_stream(http_client, upstream_url, headers, payload)
         return StreamingResponse(
-            _proxy_stream(http_client, upstream_url, headers, payload),
+            stream_gen,
             media_type="text/event-stream",
             headers=extra_headers,
         )
@@ -263,6 +488,7 @@ async def chat_completions(
         compressed_chars=total_compressed_chars,
         latency_seconds=latency,
         tokens_saved_estimate=total_tokens_saved_estimate,
+        dollars_saved=dollars_saved,
     )
 
     chars_saved = total_original_chars - total_compressed_chars
