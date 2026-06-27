@@ -33,6 +33,7 @@ from contextly.deps import (
     ConfigDep,
     ContentRouterDep,
     HttpClientDep,
+    InjectionScannerDep,
     SafeContentRouterDep,
 )
 from contextly.expand import filter_original
@@ -320,6 +321,7 @@ async def chat_completions(
     ccr_store: CCRDep,
     ab_monitor: ABMonitorDep,
     audit_writer: AuditWriterDep,
+    injection_scanner: InjectionScannerDep,
 ) -> Response:
     """Proxy /v1/chat/completions to the configured upstream with compression.
 
@@ -364,6 +366,23 @@ async def chat_completions(
 
     if audit_writer is not None:
         audit_writer.new_request()
+
+    response_headers: dict[str, str] = {}
+
+    if config.injection_detection_enabled:
+        scan_result = injection_scanner.scan_messages(payload.get("messages", []))
+        if scan_result.detected:
+            response_headers["X-Contextly-Injection-Risk"] = str(round(scan_result.risk_score, 3))
+            if (
+                config.injection_block_threshold is not None
+                and scan_result.risk_score >= config.injection_block_threshold
+            ):
+                injection_scanner.record_block()
+                return Response(
+                    status_code=400,
+                    content=json.dumps({"error": "injection_detected"}),
+                    media_type="application/json",
+                )
 
     if active_router is not None:
         query = _extract_last_user_query(payload)
@@ -454,6 +473,7 @@ async def chat_completions(
     extra_headers: dict[str, str] = {
         "X-Contextly-Compressed": str(config.compression_enabled).lower(),
         "X-Contextly-Mode-Used": mode_used,
+        **response_headers,
     }
     if ccr_keys:
         extra_headers["X-Contextly-CCR-Keys"] = json.dumps(ccr_keys)

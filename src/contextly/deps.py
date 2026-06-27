@@ -18,6 +18,7 @@ from contextly.ccr import CCRStore
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
 from contextly.gateway_stats import SQLiteStatsStore
+from contextly.injection import InjectionScanner
 
 
 def _get_config(request: Request) -> Config:
@@ -56,6 +57,10 @@ def _get_audit_writer(request: Request) -> AuditWriter | None:
     return cast(AuditWriter | None, getattr(request.app.state, "audit_writer", None))
 
 
+def _get_injection_scanner(request: Request) -> InjectionScanner:
+    return cast(InjectionScanner, request.app.state.injection_scanner)
+
+
 ConfigDep = Annotated[Config, Depends(_get_config)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(_get_http_client)]
 ContentRouterDep = Annotated[ContentRouter, Depends(_get_content_router)]
@@ -65,3 +70,4 @@ CCRDep = Annotated[CCRStore, Depends(_get_ccr_store)]
 ABMonitorDep = Annotated[ABMonitor, Depends(_get_ab_monitor)]
 GatewayStatsDep = Annotated[SQLiteStatsStore, Depends(_get_gateway_stats)]
 AuditWriterDep = Annotated[AuditWriter | None, Depends(_get_audit_writer)]
+InjectionScannerDep = Annotated[InjectionScanner, Depends(_get_injection_scanner)]
