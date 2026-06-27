@@ -361,3 +361,63 @@ def stats(host: str, port: int) -> None:
     except _httpx.ConnectError:
         click.echo(f"Cannot connect to proxy at {host}:{port}", err=True)
         sys.exit(1)
+
+
+@main.group()
+def audit() -> None:
+    """Compression audit log tools."""
+
+
+@audit.command(name="replay")
+@click.argument("log_file", type=click.Path(exists=True))
+@click.option(
+    "--proxy-url",
+    default="http://127.0.0.1:4000",
+    show_default=True,
+    help="Contextly proxy URL to fetch original content from (uses /v1/retrieve)",
+)
+@click.option(
+    "--limit",
+    default=0,
+    type=int,
+    help="Max records to show (0 = all)",
+)
+def audit_replay(log_file: str, proxy_url: str, limit: int) -> None:
+    """Replay a compression audit log, fetching originals from the CCR store.
+
+    Reads the JSONL audit log at LOG_FILE and prints each compression event.
+    When a CCR key is present and --proxy-url is reachable, fetches the
+    original content for verification.
+
+    \b
+    Example:
+        contextly audit replay .contextly/audit.jsonl --proxy-url http://127.0.0.1:4000
+    """
+    import json as _json
+
+    import httpx as _httpx
+
+    from contextly.audit import replay as _replay
+
+    records = _replay(log_file)
+    if limit > 0:
+        records = records[:limit]
+
+    client = _httpx.Client(timeout=5.0)
+    for i, rec in enumerate(records):
+        click.echo(f"\n── Record {i + 1} ──────────────────────────────")
+        click.echo(_json.dumps(rec, indent=2))
+        ccr_key = rec.get("ccr_key")
+        if ccr_key and proxy_url:
+            try:
+                resp = client.get(f"{proxy_url}/v1/retrieve/{ccr_key}")
+                if resp.status_code == 200:
+                    original = resp.json().get("content", "")
+                    preview = original[:200] + ("…" if len(original) > 200 else "")
+                    click.echo(f"  original preview: {preview!r}")
+                else:
+                    click.echo("  [CCR key not found — may have been evicted]")
+            except _httpx.ConnectError:
+                click.echo(f"  [proxy unreachable at {proxy_url}]")
+    client.close()
+    click.echo(f"\nTotal: {len(records)} records")

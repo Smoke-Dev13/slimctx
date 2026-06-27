@@ -136,7 +136,13 @@ async function tick() {
     const tokens = s.tokens_saved_estimate_total || 0;
     const price = parseFloat($('price').value) || 0;
     $('tokens').textContent = fmt(tokens);
-    $('cost').innerHTML = '$' + (tokens / 1e6 * price).toFixed(2);
+    // Use server-side dollar savings if available (has real model pricing),
+    // otherwise fall back to the manual price input for a rough estimate.
+    const serverDollars = s.dollars_saved_total;
+    const costVal = (serverDollars != null && serverDollars > 0)
+      ? serverDollars.toFixed(4)
+      : (tokens / 1e6 * price).toFixed(4);
+    $('cost').innerHTML = '$' + costVal;
     $('requests').textContent = fmt(s.requests_total || 0);
     $('compressed').textContent = fmt(s.requests_compressed || 0) + ' compressed';
     const saved = 1 - (s.compression_ratio_mean ?? 1);

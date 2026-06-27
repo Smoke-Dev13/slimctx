@@ -13,6 +13,32 @@ from typing import Annotated, Literal
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Context window sizes (input tokens) for known models.
+# Used by budget enforcement to detect when a request would overflow.
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo": 16_385,
+    "o1": 200_000,
+    "o1-mini": 128_000,
+    "o3": 200_000,
+    "o3-mini": 200_000,
+    "o4-mini": 200_000,
+    "claude-opus-4-8": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-haiku-4-5-20251001": 200_000,
+    "claude-3-5-sonnet-20241022": 200_000,
+    "claude-3-5-haiku-20241022": 200_000,
+    "claude-3-opus-20240229": 200_000,
+    "claude-3-haiku-20240307": 200_000,
+    "gemini-1.5-pro": 2_000_000,
+    "gemini-1.5-flash": 1_000_000,
+    "gemini-2.0-flash": 1_000_000,
+    "llama-3.3-70b-versatile": 128_000,
+}
+
 
 class UpstreamProvider(StrEnum):
     """Named upstream LLM providers with well-known base URLs."""
@@ -68,6 +94,35 @@ class Config(BaseSettings):
 
     # ── A/B Quality ─────────────────────────────────────────────────────────
     ab_sample_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+
+    # ── Budget enforcement ───────────────────────────────────────────────────
+    # When True, Contextly will automatically escalate the compressor chain
+    # (safe → default → aggressive) to keep the estimated input token count
+    # within the model's context window. Eliminates context_length_exceeded
+    # errors without any app changes.
+    budget_enforcement: bool = False
+
+    # ── Cost tracking ────────────────────────────────────────────────────────
+    # Per-model price overrides in USD per 1,000 input tokens.
+    # Example: CONTEXTLY_PRICING_OVERRIDES={"my-model": 0.002}
+    pricing_overrides: dict[str, float] = Field(default_factory=dict)
+
+    # ── Deduplication ────────────────────────────────────────────────────────
+    # Cross-message deduplication: replace exact-duplicate content blocks with
+    # a sentinel referencing the CCR key of the first occurrence.
+    dedup_enabled: bool = True
+    dedup_min_chars: Annotated[int, Field(ge=1)] = 200
+
+    # ── Streaming compression ─────────────────────────────────────────────────
+    # When True, compress tool-call arguments and assistant text in SSE streams.
+    # Off by default — enable once tested against your streaming client.
+    stream_compression_enabled: bool = False
+    stream_flush_sentences: Annotated[int, Field(ge=1)] = 3
+
+    # ── Audit log ────────────────────────────────────────────────────────────
+    # When set, every compression event is appended to a JSONL audit log.
+    # Empty string disables auditing.
+    audit_log_path: str = ""
 
     # ── Gateway stats bridge ────────────────────────────────────────────────
     # The proxy dashboard also surfaces the MCP gateway's savings by reading the
