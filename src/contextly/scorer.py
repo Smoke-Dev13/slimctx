@@ -119,22 +119,36 @@ class MessageScorer:
         query: str,
         *,
         min_messages: int = 5,
+        cache_stable: bool = False,
+        recent_window: int = 2,
     ) -> list[dict[str, Any]]:
         """Reorder messages by importance score.
 
         System prompt is always first; the latest user message is always last.
         No reordering is applied when the message count is below min_messages.
 
+        When ``cache_stable`` is True, the older history is kept in its original
+        chronological order (so the prompt-cache prefix stays byte-identical
+        across turns) and only the last ``recent_window`` messages — the fresh,
+        non-cacheable tail — are relevance-sorted. This reconciles relevance
+        reordering with prompt caching, which both OpenAI and Anthropic key off a
+        stable prefix.
+
         Args:
             messages: Original message list.
             query: Last user query for relevance scoring.
             min_messages: Minimum list length before reordering is attempted.
+            cache_stable: Keep the older prefix chronological; sort only the tail.
+            recent_window: Size of the fresh tail that may be reordered.
 
         Returns:
             Reordered message list, or the original list if unchanged.
         """
         if len(messages) < min_messages:
             return messages
+
+        if cache_stable:
+            return self._reorder_cache_stable(messages, query, recent_window)
 
         scored = self.score_messages(messages, query)
 
@@ -156,5 +170,43 @@ class MessageScorer:
         result.extend(s.message for s in middle)
         if last_user_idx is not None:
             result.append(messages[last_user_idx])
+
+        return result
+
+    def _reorder_cache_stable(
+        self,
+        messages: list[dict[str, Any]],
+        query: str,
+        recent_window: int,
+    ) -> list[dict[str, Any]]:
+        """Sort only the trailing ``recent_window`` messages; keep prefix as-is.
+
+        The stable prefix (everything before the tail) preserves chronological
+        order so the prompt-cache prefix is byte-identical between turns. Within
+        the tail, the latest user message is still pinned last.
+        """
+        if recent_window <= 1:
+            return messages
+
+        boundary = len(messages) - recent_window
+        if boundary <= 0:
+            return messages
+
+        prefix = messages[:boundary]
+        tail = messages[boundary:]
+
+        last_user_offset = max(
+            (i for i, m in enumerate(tail) if m.get("role") == "user"),
+            default=None,
+        )
+
+        scored_tail = self.score_messages(tail, query)
+        middle = [s for s in scored_tail if s.original_index != last_user_offset]
+        middle.sort(key=lambda s: s.score, reverse=True)
+
+        result: list[dict[str, Any]] = [*prefix]
+        result.extend(s.message for s in middle)
+        if last_user_offset is not None:
+            result.append(tail[last_user_offset])
 
         return result

@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from contextly.dashboard import DASHBOARD_HTML
 from contextly.deps import (
     ABMonitorDep,
+    CacheOptimizerDep,
     ConfigDep,
     FailoverRouterDep,
     GatewayStatsDep,
@@ -64,6 +65,7 @@ async def stats(
     ab_monitor: ABMonitorDep,
     injection_scanner: InjectionScannerDep,
     failover_router: FailoverRouterDep,
+    cache_optimizer: CacheOptimizerDep,
 ) -> JSONResponse:
     """Aggregate runtime statistics.
 
@@ -77,7 +79,12 @@ async def stats(
         JSON with request and compression aggregate stats.
     """
     return JSONResponse(
-        {**ab_monitor.stats(), **injection_scanner.stats(), **failover_router.stats()}
+        {
+            **ab_monitor.stats(),
+            **injection_scanner.stats(),
+            **failover_router.stats(),
+            **cache_optimizer.stats(),
+        }
     )
 
 

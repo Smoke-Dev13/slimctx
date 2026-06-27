@@ -25,6 +25,7 @@ from fastapi import FastAPI
 
 from contextly.ab_monitor import ABMonitor
 from contextly.audit import AuditWriter
+from contextly.cache_opt import CacheOptimizer
 from contextly.ccr import CCRStore, SQLiteCCRStore
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_smart import JsonSmartCompressor
@@ -173,6 +174,7 @@ def create_app(config: Config) -> FastAPI:
     app.state.audit_writer = AuditWriter(config.audit_log_path) if config.audit_log_path else None
     app.state.injection_scanner = InjectionScanner()
     app.state.message_scorer = MessageScorer()
+    app.state.cache_optimizer = CacheOptimizer()
     primary = FailoverTarget(
         url=config.resolved_upstream_url(),
         api_key=config.upstream_api_key,

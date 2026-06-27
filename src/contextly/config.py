@@ -127,6 +127,16 @@ class Config(BaseSettings):
     # ── Context reordering ───────────────────────────────────────────────────
     context_reorder_enabled: bool = False
     context_reorder_min_messages: int = 5
+    # When reordering is on, keep the older prefix chronological and sort only
+    # the fresh tail, so the prompt-cache prefix stays byte-stable across turns.
+    context_reorder_cache_stable: bool = True
+
+    # ── Prompt-cache optimization ─────────────────────────────────────────────
+    # Auto-inject Anthropic cache_control breakpoints and account for cache
+    # savings on both OpenAI and Anthropic responses.
+    cache_optimization_enabled: bool = False
+    cache_min_prefix_chars: int = 4096
+    cache_recent_window: int = 2
 
     # ── Prompt injection detection ───────────────────────────────────────────
     injection_detection_enabled: bool = False
