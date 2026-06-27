@@ -135,10 +135,9 @@ module = [
 ]
 ignore_missing_imports = true
 
-# The low-level MCP Server exposes untyped decorators (@server.list_tools(),
-# @server.call_tool()); relax the two strict flags they trip for this module only.
+# MCP modules expose untyped decorators; relax the two strict flags they trip.
 [[tool.mypy.overrides]]
-module = ["contextly.mcp_gateway"]
+module = ["contextly.mcp_gateway", "contextly.mcp_server"]
 disallow_untyped_decorators = false
 disallow_untyped_calls = false
 

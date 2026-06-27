@@ -27,6 +27,7 @@ Run it:
 from __future__ import annotations
 
 import base64
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from contextly.compressors.logs import LogCompressor
 from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.expand import filter_original
+from contextly.firewall import SecretRedactor
 from contextly.gateway_stats import SQLiteStatsStore, StatsRecorder, default_stats_path
 
 try:
@@ -64,6 +66,10 @@ _EXPAND_TOOL_NAME = "contextly_expand"
 
 # Number of warm-up calls before a tool's preferred compressor is locked in.
 _TOOL_LEARNING_CALLS = 5
+
+# When CONTEXTLY_GATEWAY_FIREWALL=1, tool outputs are redacted before compression.
+_gateway_firewall_enabled: bool = os.environ.get("CONTEXTLY_GATEWAY_FIREWALL", "0") == "1"
+_gateway_redactor: SecretRedactor = SecretRedactor()
 
 
 class ToolCompressorRegistry:
@@ -250,13 +256,17 @@ def build_gateway_server(
         new_content: list[types.ContentBlock] = []
         for block in result.content:
             if isinstance(block, types.TextContent):
+                # Optionally redact secrets/PII before compression (CONTEXTLY_GATEWAY_FIREWALL=1).
+                raw_text = block.text
+                if _gateway_firewall_enabled and raw_text.strip():
+                    raw_text = _gateway_redactor.redact(raw_text).redacted_text
                 # Compression is best-effort: a compressor fault must never turn a
                 # working tool into a failing one, so fall back to the raw text.
                 try:
-                    if tool_registry is not None and block.text.strip():
-                        learned = tool_registry.select(name, block.text)
+                    if tool_registry is not None and raw_text.strip():
+                        learned = tool_registry.select(name, raw_text)
                         # Wrap the learned compressor in a single-item router
-                        text = block.text
+                        text = raw_text
                         try:
                             lr = learned.compress(text)
                             if lr.compression_ratio < 1.0:
@@ -272,14 +282,14 @@ def build_gateway_server(
                                     )
                                     compressed = lr.content + note
                             else:
-                                compressed, _ = compress_payload(block.text, router, store)
+                                compressed, _ = compress_payload(raw_text, router, store)
                         except Exception:
-                            compressed, _ = compress_payload(block.text, router, store)
+                            compressed, _ = compress_payload(raw_text, router, store)
                     else:
-                        compressed, _ref = compress_payload(block.text, router, store)
+                        compressed, _ref = compress_payload(raw_text, router, store)
                 except Exception:
                     logger.warning("gateway_compress_failed", tool=name, exc_info=True)
-                    compressed = block.text
+                    compressed = raw_text
                 new_content.append(types.TextContent(type="text", text=compressed))
             else:
                 new_content.append(block)
