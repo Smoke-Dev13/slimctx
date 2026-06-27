@@ -124,6 +124,10 @@ class Config(BaseSettings):
     # Empty string disables auditing.
     audit_log_path: str = ""
 
+    # ── Prompt injection detection ───────────────────────────────────────────
+    injection_detection_enabled: bool = False
+    injection_block_threshold: float | None = None
+
     # ── Gateway stats bridge ────────────────────────────────────────────────
     # The proxy dashboard also surfaces the MCP gateway's savings by reading the
     # shared stats file the gateway writes (so one dashboard shows both). Empty

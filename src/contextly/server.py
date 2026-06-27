@@ -34,6 +34,7 @@ from contextly.compressors.prose import ProseCompressor
 from contextly.compressors.registry import ContentRouter
 from contextly.config import Config
 from contextly.gateway_stats import SQLiteStatsStore, default_stats_path
+from contextly.injection import InjectionScanner
 from contextly.routes.observability import router as obs_router
 from contextly.routes.openai_compat import router as openai_router
 
@@ -168,6 +169,7 @@ def create_app(config: Config) -> FastAPI:
     # snapshot() aggregates every server that wrote to the file).
     app.state.gateway_stats = SQLiteStatsStore(config.gateway_stats_path or default_stats_path())
     app.state.audit_writer = AuditWriter(config.audit_log_path) if config.audit_log_path else None
+    app.state.injection_scanner = InjectionScanner()
     app.include_router(obs_router)
     app.include_router(openai_router)
     return app
