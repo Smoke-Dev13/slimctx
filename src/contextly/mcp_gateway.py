@@ -36,7 +36,7 @@ from urllib.parse import urlparse
 import structlog
 from pydantic import AnyUrl
 
-from contextly.ccr import CCRStore
+from contextly.ccr import CCRStore, SharedMemoryStore, default_shared_memory_path
 from contextly.compressors.base import Compressor
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
@@ -70,6 +70,19 @@ _TOOL_LEARNING_CALLS = 5
 # When CONTEXTLY_GATEWAY_FIREWALL=1, tool outputs are redacted before compression.
 _gateway_firewall_enabled: bool = os.environ.get("CONTEXTLY_GATEWAY_FIREWALL", "0") == "1"
 _gateway_redactor: SecretRedactor = SecretRedactor()
+
+
+def _gateway_agent_id() -> str:
+    """Stable identifier for this gateway process (overridable via env)."""
+    explicit = os.environ.get("CONTEXTLY_AGENT_ID")
+    if explicit:
+        return explicit
+    try:
+        import socket
+
+        return f"{socket.gethostname()}:{os.getpid()}"
+    except OSError:  # pragma: no cover
+        return "default"
 
 
 class ToolCompressorRegistry:
@@ -396,7 +409,12 @@ async def run_gateway(
     """
     # MCP stdio requires stdout to carry ONLY JSON-RPC; send all logs to stderr.
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
-    store = store or CCRStore()
+    if store is None:
+        if os.environ.get("CONTEXTLY_SHARED_MEMORY") == "1":
+            path = os.environ.get("CONTEXTLY_SHARED_MEMORY_PATH") or default_shared_memory_path()
+            store = SharedMemoryStore(path, agent_id=_gateway_agent_id())
+        else:
+            store = CCRStore()
     router = build_router()
     server_name = server_name or derive_server_name(command, args)
     stats = stats or SQLiteStatsStore(stats_path or default_stats_path(), server_name)

@@ -192,3 +192,119 @@ class SQLiteCCRStore(CCRStore):
     def __len__(self) -> int:
         with self._lock:
             return int(self._conn.execute("SELECT COUNT(*) FROM ccr").fetchone()[0])
+
+
+def default_shared_memory_path() -> str:
+    """Well-known shared-memory DB used by every agent process on this host."""
+    return str(Path.home() / ".contextly" / "shared-memory.db")
+
+
+class SharedMemoryStore(SQLiteCCRStore):
+    """Cross-agent shared CCR store.
+
+    A WAL-mode SQLite store pointed at one well-known file
+    (:func:`default_shared_memory_path`) so independent agent processes — Claude
+    Code, Cursor, Codex, the proxy, every wrapped gateway — converge on a single
+    deduplicated memory pool. Content compressed/stored by one agent is reused by
+    any other: the content hash is the key, so an identical original from a second
+    agent is a dedup hit, not a new row.
+
+    Adds, over :class:`SQLiteCCRStore`:
+      - ``agent_id`` attribution per entry and ``last_accessed`` for access-based LRU,
+      - :meth:`lookup` for dedup discovery (does any agent already have this?),
+      - cross-agent metrics: ``dedup_hits`` (repeat stores of existing content) and
+        ``cross_agent_retrievals`` (a retrieve of content stored by a different agent).
+    """
+
+    def __init__(self, path: str, max_entries: int = 10_000, *, agent_id: str = "default") -> None:
+        super().__init__(path, max_entries)
+        self._agent_id = agent_id
+        self._dedup_hits = 0
+        self._cross_agent_retrievals = 0
+        # Extend the base schema in place (idempotent for existing files).
+        self._conn.execute("PRAGMA busy_timeout=2000")
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(ccr)")}
+        if "agent_id" not in cols:
+            self._conn.execute("ALTER TABLE ccr ADD COLUMN agent_id TEXT")
+        if "last_accessed" not in cols:
+            self._conn.execute("ALTER TABLE ccr ADD COLUMN last_accessed REAL")
+        self._conn.commit()
+
+    def store(self, content: str, *, agent_id: str | None = None) -> str:
+        agent_id = agent_id if agent_id is not None else self._agent_id
+        key = content_key(content)
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute("SELECT agent_id FROM ccr WHERE key=?", (key,)).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO ccr(key, content, created, agent_id, last_accessed) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (key, content, now, agent_id, now),
+                )
+                self._n_stored += 1
+                count = self._conn.execute("SELECT COUNT(*) FROM ccr").fetchone()[0]
+                if count > self._max:
+                    # Evict the least-recently-accessed rows (fall back to created).
+                    self._conn.execute(
+                        "DELETE FROM ccr WHERE key IN "
+                        "(SELECT key FROM ccr "
+                        "ORDER BY COALESCE(last_accessed, created) ASC LIMIT ?)",
+                        (count - self._max,),
+                    )
+            else:
+                # Content already known (this or another agent) → dedup hit.
+                self._dedup_hits += 1
+                self._conn.execute("UPDATE ccr SET last_accessed=? WHERE key=?", (now, key))
+            self._conn.commit()
+        return key
+
+    def lookup(self, content: str) -> tuple[str, str] | None:
+        """Return ``(key, stored_by_agent_id)`` if *content* is already stored.
+
+        Pure read — does not store or mutate counters. Lets an agent ask "has any
+        agent already compressed this?" before doing the work itself.
+        """
+        key = content_key(content)
+        with self._lock:
+            row = self._conn.execute("SELECT agent_id FROM ccr WHERE key=?", (key,)).fetchone()
+            if row is None:
+                return None
+            return key, (row[0] if row[0] is not None else "default")
+
+    def retrieve(self, key: str, *, agent_id: str | None = None) -> str | None:
+        agent_id = agent_id if agent_id is not None else self._agent_id
+        now = time.time()
+        with self._lock:
+            self._n_retrieved += 1
+            row = self._conn.execute(
+                "SELECT content, agent_id FROM ccr WHERE key=?", (key,)
+            ).fetchone()
+            if row is None:
+                self._n_misses += 1
+                return None
+            self._n_hits += 1
+            stored_by = row[1] if row[1] is not None else "default"
+            if stored_by != agent_id:
+                self._cross_agent_retrievals += 1
+            self._conn.execute("UPDATE ccr SET last_accessed=? WHERE key=?", (now, key))
+            self._conn.commit()
+            return str(row[0])
+
+    def stats(self) -> dict[str, Any]:
+        base = super().stats()
+        with self._lock:
+            distinct = int(
+                self._conn.execute(
+                    "SELECT COUNT(DISTINCT agent_id) FROM ccr WHERE agent_id IS NOT NULL"
+                ).fetchone()[0]
+            )
+            base.update(
+                {
+                    "backend": "shared-memory",
+                    "dedup_hits": self._dedup_hits,
+                    "cross_agent_retrievals": self._cross_agent_retrievals,
+                    "distinct_agents": distinct,
+                }
+            )
+            return base

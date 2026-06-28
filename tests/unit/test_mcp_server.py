@@ -242,7 +242,49 @@ async def test_expand_with_contains_filters(fresh_store: CCRStore) -> None:
 
 def test_mcp_has_expected_tools() -> None:
     tools = mcp._tool_manager.list_tools()
-    assert len(tools) == 6
+    assert len(tools) == 7
+
+
+def test_mcp_has_memory_lookup_tool() -> None:
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "memory_lookup" in tool_names
+
+
+# ── cross-agent shared memory ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compress_dedup_hit_on_shared_store(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from contextly.ccr import SharedMemoryStore
+    from contextly.mcp_server import _compress
+
+    router = ContentRouter()
+    from contextly.compressors.prose import ProseCompressor
+
+    router.register(ProseCompressor())
+
+    a = SharedMemoryStore(str(tmp_path / "m.db"), agent_id="agent_a")
+    b = SharedMemoryStore(str(tmp_path / "m.db"), agent_id="agent_b")
+
+    first = await _compress("reused content across agents", "", a, router)
+    assert first["dedup_hit"] is False
+
+    second = await _compress("reused content across agents", "", b, router)
+    assert second["dedup_hit"] is True
+    assert second["stored_by"] == "agent_a"
+    assert second["ccr_key"] == first["ccr_key"]
+
+
+@pytest.mark.asyncio
+async def test_compress_no_dedup_field_breakage_in_memory(
+    fresh_store: CCRStore, router: ContentRouter
+) -> None:
+    from contextly.mcp_server import _compress
+
+    result = await _compress("plain content", "", fresh_store, router)
+    # In-memory store: feature inert, dedup never hits.
+    assert result["dedup_hit"] is False
+    assert result["stored_by"] is None
 
 
 def test_mcp_has_scan_injection_tool() -> None:

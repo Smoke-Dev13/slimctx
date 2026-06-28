@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import socket
 from typing import Any
 
 import structlog
 
-from contextly.ccr import CCRStore
+from contextly.ccr import CCRStore, SharedMemoryStore, default_shared_memory_path
 from contextly.compressors.code import CodeCompressor
 from contextly.compressors.json_table import JsonTableCompressor
 from contextly.compressors.logs import LogCompressor
@@ -67,7 +69,27 @@ def _build_default_router() -> ContentRouter:
     return router
 
 
-_default_store: CCRStore = CCRStore()
+def _agent_id() -> str:
+    """Stable identifier for this agent process (overridable via env)."""
+    explicit = os.environ.get("CONTEXTLY_AGENT_ID")
+    if explicit:
+        return explicit
+    try:
+        return f"{socket.gethostname()}:{os.getpid()}"
+    except OSError:  # pragma: no cover - hostname lookup failure is rare
+        return "default"
+
+
+def _build_default_store(agent_id: str) -> CCRStore:
+    """Use the cross-agent shared memory store when CONTEXTLY_SHARED_MEMORY=1."""
+    if os.environ.get("CONTEXTLY_SHARED_MEMORY") == "1":
+        path = os.environ.get("CONTEXTLY_SHARED_MEMORY_PATH") or default_shared_memory_path()
+        return SharedMemoryStore(path, agent_id=agent_id)
+    return CCRStore()
+
+
+_AGENT_ID: str = _agent_id()
+_default_store: CCRStore = _build_default_store(_AGENT_ID)
 _default_router: ContentRouter = _build_default_router()
 _default_scanner: InjectionScanner = InjectionScanner()
 _default_redactor: SecretRedactor = SecretRedactor()
@@ -94,8 +116,19 @@ async def _compress(
         Dict with compressed, ccr_key, original_chars, compressed_chars,
         compression_ratio, and compressor.
     """
+    # Cross-agent dedup discovery: if any agent already stored this exact content,
+    # reuse its key instead of recompressing — the shared-memory saving in action.
+    dedup_hit = False
+    stored_by: str | None = None
+    if isinstance(store, SharedMemoryStore):
+        found = store.lookup(content)
+        if found is not None:
+            dedup_hit = True
+            _key, stored_by = found
+
     compressor = router.select(content, query)
     result = compressor.compress(content, query)
+    # SharedMemoryStore records its own instance agent_id; CCRStore ignores it.
     ccr_key = store.store(content)
 
     logger.info(
@@ -103,6 +136,7 @@ async def _compress(
         compressor=result.compressor_name,
         ratio=round(result.compression_ratio, 3),
         ccr_key=ccr_key,
+        dedup_hit=dedup_hit,
     )
 
     lossless = bool(result.metadata.get("lossless"))
@@ -120,6 +154,9 @@ async def _compress(
         # pull the full original back by calling expand(expand_ref).
         "expandable": expandable,
         "expand_ref": ccr_key if expandable else None,
+        # Cross-agent memory: True when another agent had already cached this.
+        "dedup_hit": dedup_hit,
+        "stored_by": stored_by,
         "hint": (
             f"Content was compressed with loss. Call expand('{ccr_key}') for the "
             f"full original, or expand('{ccr_key}', contains='...') to pull back "
@@ -207,11 +244,43 @@ async def expand(ref: str, contains: str = "") -> str:
 
 @mcp.tool(
     name="compression_stats",
-    description="Return statistics for the in-process CCR store (entries, hit rate, etc.).",
+    description="Return statistics for the CCR store (entries, hit rate, cross-agent dedup, etc.).",
 )
 async def compression_stats() -> dict[str, Any]:
     """Return a snapshot of CCR store metrics."""
     return _default_store.stats()
+
+
+@mcp.tool(
+    name="memory_lookup",
+    description=(
+        "Check the cross-agent shared memory: has any agent (Claude, Cursor, Codex, …) "
+        "already compressed/stored this exact content? Returns found, the ccr_key, "
+        "which agent stored it (stored_by), and is_cross_agent (True when a different "
+        "agent stored it). Use before compressing to reuse another agent's work. "
+        "Requires shared-memory mode (CONTEXTLY_SHARED_MEMORY=1)."
+    ),
+)
+async def memory_lookup(content: str) -> dict[str, Any]:
+    """Look up *content* in the shared memory without storing it."""
+    if not isinstance(_default_store, SharedMemoryStore):
+        return {
+            "found": False,
+            "key": None,
+            "stored_by": None,
+            "is_cross_agent": False,
+            "note": "shared memory disabled — set CONTEXTLY_SHARED_MEMORY=1 to enable",
+        }
+    found = _default_store.lookup(content)
+    if found is None:
+        return {"found": False, "key": None, "stored_by": None, "is_cross_agent": False}
+    key, stored_by = found
+    return {
+        "found": True,
+        "key": key,
+        "stored_by": stored_by,
+        "is_cross_agent": stored_by != _default_store._agent_id,
+    }
 
 
 @mcp.tool(
@@ -306,14 +375,22 @@ def audit_context_security(text: str) -> list[dict[str, Any]]:
 async def server_info() -> str:
     """Human-readable Contextly server description."""
     stats = _default_store.stats()
+    shared = isinstance(_default_store, SharedMemoryStore)
+    mem_line = (
+        f"Shared memory: ON (agent {_AGENT_ID}), "
+        f"{stats.get('cross_agent_retrievals', 0)} cross-agent retrievals"
+        if shared
+        else "Shared memory: OFF (set CONTEXTLY_SHARED_MEMORY=1 to enable)"
+    )
     return (
         "Contextly MCP Server\n"
         "====================\n"
         "Tools: compress_text, retrieve_original, expand, compression_stats,\n"
-        "       scan_for_injection, redact_secrets\n"
+        "       memory_lookup, scan_for_injection, redact_secrets\n"
         "Prompts: compress-before-sending, audit-context-security\n"
         f"CCR store: {stats['current_entries']}/{stats['max_entries']} entries, "
-        f"hit rate {stats['hit_rate']:.1%}"
+        f"hit rate {stats['hit_rate']:.1%}\n"
+        f"{mem_line}"
     )
 
 
