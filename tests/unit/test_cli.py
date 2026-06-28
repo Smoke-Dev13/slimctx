@@ -161,3 +161,53 @@ def test_audit_replay_with_ccr_key_proxy_unreachable(runner: CliRunner, tmp_path
     )
     assert result.exit_code == 0
     assert "proxy unreachable" in result.output
+
+
+def test_learn_reports_failures(runner: CliRunner, tmp_path: object) -> None:
+    import json
+    import pathlib
+
+    log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
+    rows = [
+        {"model": "gpt-4o", "compressor": "json_smart", "quality_score": 0.3,
+         "numeric_consistency": 1.0, "original_chars": 1000, "compressed_chars": 300}
+        for _ in range(8)
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    result = runner.invoke(main, ["learn", str(log)])
+    assert result.exit_code == 0
+    assert "json_smart/gpt-4o" in result.output
+    assert "HIGH" in result.output
+
+
+def test_learn_clean_log_no_issues(runner: CliRunner, tmp_path: object) -> None:
+    import json
+    import pathlib
+
+    log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
+    log.write_text(json.dumps(
+        {"model": "gpt-4o", "compressor": "prose", "quality_score": 0.95,
+         "numeric_consistency": 1.0, "original_chars": 100, "compressed_chars": 50}
+    ) + "\n")
+
+    result = runner.invoke(main, ["learn", str(log)])
+    assert result.exit_code == 0
+    assert "No compression failures" in result.output
+
+
+def test_learn_json_output(runner: CliRunner, tmp_path: object) -> None:
+    import json
+    import pathlib
+
+    log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
+    log.write_text(json.dumps(
+        {"model": "gpt-4o", "compressor": "prose", "quality_score": 0.95,
+         "numeric_consistency": 1.0, "original_chars": 100, "compressed_chars": 50}
+    ) + "\n")
+
+    result = runner.invoke(main, ["learn", str(log), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["samples_total"] == 1
+    assert payload["recommendations"] == []

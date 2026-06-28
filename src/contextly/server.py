@@ -189,7 +189,7 @@ def create_app(config: Config) -> FastAPI:
     app.state.ccr_store = (
         SQLiteCCRStore(config.ccr_path) if config.ccr_backend == "sqlite" else CCRStore()
     )
-    app.state.ab_monitor = ABMonitor()
+    app.state.ab_monitor = ABMonitor(log_path=config.ab_log_path or None)
     # Read-only view onto the shared file the MCP gateway writes, so the proxy
     # dashboard can surface gateway savings alongside its own (server label "" —
     # snapshot() aggregates every server that wrote to the file).
