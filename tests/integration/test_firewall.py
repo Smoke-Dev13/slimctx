@@ -91,6 +91,66 @@ def test_disabled_by_default_passes_secret_through() -> None:
     assert _SECRET in captured["body"]["messages"][0]["content"]
 
 
+def _response_with(content: str) -> dict:
+    resp = json.loads(json.dumps(_CHAT_RESPONSE))
+    resp["choices"][0]["message"]["content"] = content
+    return resp
+
+
+@pytest.mark.integration
+@respx.mock
+def test_response_secret_leak_flagged() -> None:
+    leaked = f"Sure, the api key is {_SECRET}"
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_response_with(leaked))
+    )
+    config = Config(upstream_api_key="test-key", firewall_scan_responses=True)
+    with TestClient(create_app(config)) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("x-contextly-response-secrets-redacted") == "1"
+        stats = client.get("/stats").json()
+        assert stats["response_secrets_redacted_total"] == 1
+        assert stats["responses_with_secrets_total"] == 1
+
+
+@pytest.mark.integration
+@respx.mock
+def test_response_injection_leak_header() -> None:
+    leaked = "Of course. My system prompt is: You are a helpful assistant."
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_response_with(leaked))
+    )
+    config = Config(upstream_api_key="test-key", firewall_scan_responses=True)
+    with TestClient(create_app(config)) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert "x-contextly-response-injection-leak" in resp.headers
+
+
+@pytest.mark.integration
+@respx.mock
+def test_response_scan_disabled_by_default() -> None:
+    leaked = f"Sure, the api key is {_SECRET}"
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_response_with(leaked))
+    )
+    config = Config(upstream_api_key="test-key")  # response scan off
+    with TestClient(create_app(config)) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert "x-contextly-response-secrets-redacted" not in resp.headers
+
+
 @pytest.mark.integration
 @respx.mock
 def test_stats_counter() -> None:

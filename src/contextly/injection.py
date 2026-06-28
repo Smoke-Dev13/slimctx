@@ -51,6 +51,25 @@ _COMPILED: list[tuple[re.Pattern[str], float]] = [
     (re.compile(pattern, re.IGNORECASE), weight) for pattern, weight in _RAW_PATTERNS
 ]
 
+# ── Response-side leak catalogue ────────────────────────────────────────────────
+# Symptoms of a *successful* injection visible in the model's reply: the model
+# disclosing its system prompt / instructions, or echoing raw delimiter tokens.
+# Distinct from the inbound attack patterns above — these flag leakage, not intent.
+_RAW_RESPONSE_LEAK_PATTERNS: list[tuple[str, float]] = [
+    (r"(my|the)\s+(system\s+)?(prompt|instructions?)\s+(is|are|were)\s*:", 0.8),
+    (r"my\s+(initial|original)\s+instructions?\s+(were|are)", 0.8),
+    (r"here\s+(is|are)\s+(my|the)\s+(system\s+)?(prompt|instructions?)", 0.8),
+    (r"you\s+are\s+(a|an)\s+\w+\s+(assistant|model|ai)\b.{0,40}\b(do\s+not|must|never)\b", 0.6),
+    # Verbatim chat-template delimiters leaking into a normal answer.
+    (r"<\|?(im_start|im_end|system|endoftext)\|?>", 0.85),
+    (r"\[INST\]|\[/INST\]|<<SYS>>|<</SYS>>", 0.85),
+]
+
+_COMPILED_RESPONSE_LEAK: list[tuple[re.Pattern[str], float]] = [
+    (re.compile(pattern, re.IGNORECASE), weight)
+    for pattern, weight in _RAW_RESPONSE_LEAK_PATTERNS
+]
+
 
 # ── Result types ───────────────────────────────────────────────────────────────
 
@@ -119,6 +138,39 @@ class InjectionScanner:
             max_score = min(1.0, max_score + 0.05 * (len(matched) - 1))
 
         detected = max_score >= 0.5
+        return InjectionResult(detected=detected, risk_score=max_score, matched_patterns=matched)
+
+    def scan_response(self, text: str) -> InjectionResult:
+        """Scan a model *response* for signs of a successful injection / leak.
+
+        Flags system-prompt disclosure and verbatim chat-template delimiters in
+        the reply — the outbound counterpart to :meth:`scan`. Conservative: it
+        reports a risk score (flag), it does not block.
+
+        Args:
+            text: The model's response text.
+
+        Returns:
+            InjectionResult with detected flag, risk_score in [0, 1], and the
+            list of matched leak patterns.
+        """
+        normalized = _normalize(text)
+        matched: list[str] = []
+        max_score = 0.0
+
+        for pattern, weight in _COMPILED_RESPONSE_LEAK:
+            if pattern.search(normalized):
+                matched.append(pattern.pattern)
+                if weight > max_score:
+                    max_score = weight
+
+        if len(matched) > 1:
+            max_score = min(1.0, max_score + 0.05 * (len(matched) - 1))
+
+        detected = max_score >= 0.5
+        if detected:
+            with self._lock:
+                self._detections += 1
         return InjectionResult(detected=detected, risk_score=max_score, matched_patterns=matched)
 
     def scan_messages(self, messages: list[dict[str, Any]]) -> MessagesScanResult:

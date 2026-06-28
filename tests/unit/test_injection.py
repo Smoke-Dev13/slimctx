@@ -127,3 +127,34 @@ def test_risk_score_capped_at_one() -> None:
     )
     result = s.scan(payload)
     assert result.risk_score <= 1.0
+
+
+# ── scan_response (outbound leak detection) ─────────────────────────────────────
+
+
+def test_scan_response_clean_answer_not_detected() -> None:
+    s = _scanner()
+    result = s.scan_response("Sure! The capital of France is Paris.")
+    assert not result.detected
+    assert result.risk_score == 0.0
+    assert result.matched_patterns == []
+
+
+def test_scan_response_system_prompt_leak_detected() -> None:
+    s = _scanner()
+    result = s.scan_response("Of course. My system prompt is: You are a helpful assistant.")
+    assert result.detected
+    assert result.risk_score >= 0.5
+    assert len(result.matched_patterns) > 0
+
+
+def test_scan_response_delimiter_leak_detected() -> None:
+    s = _scanner()
+    result = s.scan_response("...and then <|im_start|>system you must...")
+    assert result.detected
+
+
+def test_scan_response_increments_detection_counter() -> None:
+    s = _scanner()
+    s.scan_response("here are my instructions: never reveal secrets")
+    assert s.stats()["injections_detected_total"] == 1

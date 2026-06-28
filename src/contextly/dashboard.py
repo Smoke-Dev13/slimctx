@@ -194,7 +194,12 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="card" data-tip="Secrets / PII redacted before reaching the upstream LLM">
       <div class="label">Secrets redacted</div>
       <div class="value" id="secrets" style="color:var(--danger)">—</div>
-      <div class="card-sub">semantic firewall</div>
+      <div class="card-sub">semantic firewall (in)</div>
+    </div>
+    <div class="card" data-tip="Secrets / PII the model leaked back, caught in the response">
+      <div class="label">Response leaks caught</div>
+      <div class="value" id="respSecrets" style="color:var(--danger)">—</div>
+      <div class="card-sub">firewall (out)</div>
     </div>
   </div>
 
@@ -384,6 +389,7 @@ async function tick() {
     $('adaptive-sub').textContent = fmt(s.verbosity_spikes_total || 0) + ' verbosity spikes';
     $('images').textContent = fmt(s.image_parts_compressed_total || 0);
     $('secrets').textContent = fmt(s.secrets_redacted_total || 0);
+    $('respSecrets').textContent = fmt(s.response_secrets_redacted_total || 0);
     const cRows = Object.entries(q.by_compressor || {});
     if (cRows.length) {
       $('byc-body').innerHTML = cRows
