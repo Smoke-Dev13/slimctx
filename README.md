@@ -139,7 +139,7 @@ Options:
 
 ### `contextly learn`
 
-Mine the A/B quality log (produced when `--ab-log-path` is set) for compressor/model combinations whose quality regressed and emit ranked, actionable recommendations:
+Mine the A/B quality log (produced by `--ab-log-path`) for compressor/model combinations whose ROUGE-1 or numeric consistency regressed:
 
 ```bash
 contextly learn .contextly/ab.jsonl
@@ -148,12 +148,10 @@ contextly learn .contextly/ab.jsonl --min-quality 0.75 --json
 
 ```
 Options:
-  --min-quality FLOAT   Mean ROUGE-1 below which a combo is a failure  [default: 0.7]
-  --min-numeric FLOAT   Mean numeric-consistency below which factual loss is flagged  [default: 0.9]
-  --json                Emit the report as JSON
+  --min-quality FLOAT   [default: 0.7]
+  --min-numeric FLOAT   [default: 0.9]
+  --json                Machine-readable output
 ```
-
-Groups with fewer than 5 samples are reported as `low` confidence so you don't act on noise. A group with good ROUGE-1 but low numeric consistency is still flagged as `medium` severity — a fluent answer with a wrong figure is the silent failure mode lossy compression is most likely to produce.
 
 ### Safe mode
 
@@ -352,63 +350,18 @@ View results at `GET /quality` or via the `contextly_ab_quality_score` histogram
 
 ## Security Firewall
 
-Contextly ships a zero-dependency, regex-based security layer that operates on both sides of the proxy. It requires no external service and adds sub-millisecond overhead.
+Enable with `CONTEXTLY_FIREWALL_ENABLED=true`. Zero-dependency, sub-millisecond overhead.
 
-### Inbound (request) scanning
+- **Inbound** — prompt-injection detection (risk score 0–1; auto-block above `INJECTION_BLOCK_THRESHOLD`) and secret/PII redaction (API keys, SSNs, credit cards) before requests reach the upstream.
+- **Outbound** — set `CONTEXTLY_FIREWALL_SCAN_RESPONSES=true` to also scan responses for echoed secrets and system-prompt disclosure. Adds `X-Contextly-Response-Secrets-Redacted` / `X-Contextly-Response-Injection-Leak` headers; flag-only, body is never rewritten.
 
-Enable with `CONTEXTLY_FIREWALL_ENABLED=true`:
-
-- **Prompt-injection detection** (`InjectionScanner`) — scans every incoming message for patterns characteristic of override attempts, jailbreak triggers, role escalation, data-exfiltration requests, and delimiter injection. Returns a risk score in `[0, 1]`; requests above `CONTEXTLY_INJECTION_BLOCK_THRESHOLD` are rejected with `400`.
-- **Secret/PII redaction** (`SecretRedactor`) — replaces API keys (OpenAI, Anthropic, AWS, GCP, Stripe, …), SSNs, credit-card numbers, and other PII in the prompt before it reaches the upstream model.
-
-### Outbound (response) scanning
-
-Enable additionally with `CONTEXTLY_FIREWALL_SCAN_RESPONSES=true`:
-
-- **Response secret detection** — runs the same secret catalogue on the model's reply. If the model echoed a key or SSN from context back to the caller, `X-Contextly-Response-Secrets-Redacted: <n>` is added to the response headers and the counter increments in `/stats`.
-- **Injection-leak detection** — scans the response for symptoms of a *successful* injection: system-prompt disclosure ("my instructions are …", "here is my system prompt"), verbatim chat-template delimiters (`<|im_start|>`, `[INST]`, `<<SYS>>`). Detected leaks set `X-Contextly-Response-Injection-Leak: <score>`.
-
-Both outbound detections are **flag-only** (non-destructive) — the response body is not rewritten, so structured JSON responses are never corrupted. Body-rewrite is a planned follow-up.
-
-### Security stats
-
-```bash
-curl http://localhost:4000/stats | jq .firewall
-```
-
-```json
-{
-  "secrets_redacted_total": 12,
-  "requests_with_secrets_total": 7,
-  "response_secrets_redacted_total": 2,
-  "responses_with_secrets_total": 1,
-  "injections_detected_total": 3,
-  "injections_blocked_total": 1
-}
-```
+Counters for both directions are in `GET /stats` under `firewall`.
 
 ---
 
 ## Cross-Agent Shared Memory
 
-Contextly includes a persistent key-value memory store accessible over HTTP and MCP, designed for multi-agent pipelines where agents need to share state across calls.
-
-### HTTP API
-
-| Method | Path | Description |
-|---|---|---|
-| `PUT` | `/v1/memory/{key}` | Store a value (body: `{"value": "..."}`) |
-| `GET` | `/v1/memory/{key}` | Retrieve a stored value |
-| `DELETE` | `/v1/memory/{key}` | Delete a key |
-| `GET` | `/v1/memory` | List all keys |
-
-### MCP tools
-
-When running as an MCP server (`contextly mcp`), the same store is exposed as `memory_write`, `memory_read`, `memory_delete`, and `memory_list` tools.
-
-### Semantic deduplication
-
-On write, Contextly checks for near-duplicate entries using a fast content hash. Entries whose content is semantically equivalent (within the configured threshold) are silently merged rather than stored twice, keeping the memory store compact even in long-running agent loops.
+HTTP (`PUT/GET/DELETE /v1/memory/{key}`, `GET /v1/memory`) and MCP (`memory_write/read/delete/list`) key-value store for agents that need to share state across calls. Writes are deduplicated by content hash.
 
 ---
 
