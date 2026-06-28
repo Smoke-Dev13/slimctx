@@ -94,6 +94,10 @@ class Config(BaseSettings):
 
     # ── A/B Quality ─────────────────────────────────────────────────────────
     ab_sample_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+    # When set, every shadow A/B sample is appended as JSONL to this path. This
+    # is the persisted corpus that ``contextly learn`` mines for compression
+    # failures (low-quality compressor/model combos) and tuning recommendations.
+    ab_log_path: str = ""
 
     # ── Budget enforcement ───────────────────────────────────────────────────
     # When True, Contextly will automatically escalate the compressor chain

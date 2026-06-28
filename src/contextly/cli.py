@@ -52,6 +52,11 @@ def main() -> None:
     type=float,
     help="Fraction of requests to run through A/B quality monitoring (0-1)",
 )
+@click.option(
+    "--ab-log-path",
+    default="",
+    help="Persist A/B samples as JSONL here for 'contextly learn' to mine",
+)
 @click.option("--workers", default=1, show_default=True, type=int, help="Uvicorn worker count")
 @click.option(
     "--log-level",
@@ -86,6 +91,7 @@ def proxy(
     upstream_url: str | None,
     upstream_api_key: str,
     ab_sample_rate: float,
+    ab_log_path: str,
     workers: int,
     log_level: str,
     no_compress: bool,
@@ -110,6 +116,7 @@ def proxy(
         upstream_base_url=upstream_url,  # type: ignore[arg-type]
         upstream_api_key=upstream_api_key,
         ab_sample_rate=ab_sample_rate,
+        ab_log_path=ab_log_path,
         workers=workers,
         log_level=log_level,
         compression_enabled=not no_compress,
@@ -361,6 +368,60 @@ def stats(host: str, port: int) -> None:
     except _httpx.ConnectError:
         click.echo(f"Cannot connect to proxy at {host}:{port}", err=True)
         sys.exit(1)
+
+
+@main.command(name="learn")
+@click.argument("ab_log", type=click.Path(exists=True))
+@click.option(
+    "--min-quality",
+    default=0.7,
+    show_default=True,
+    type=float,
+    help="Mean A/B quality below which a compressor/model combo is a failure",
+)
+@click.option(
+    "--min-numeric",
+    default=0.9,
+    show_default=True,
+    type=float,
+    help="Mean numeric-consistency below which a combo is flagged for factual loss",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the report as JSON")
+def learn(ab_log: str, min_quality: float, min_numeric: float, as_json: bool) -> None:
+    """Mine an A/B quality log for compression failures and emit corrections.
+
+    Reads the JSONL corpus produced when the proxy runs with CONTEXTLY_AB_LOG_PATH
+    set, finds the compressor/model combinations whose quality regressed, and
+    prints ranked, actionable tuning recommendations.
+
+    \b
+    Example:
+        contextly learn .contextly/ab.jsonl --min-quality 0.75
+    """
+    import json as _json
+
+    from contextly.learn import learn_from_log
+
+    report = learn_from_log(ab_log, min_quality=min_quality, min_numeric=min_numeric)
+
+    if as_json:
+        click.echo(_json.dumps(report.to_dict(), indent=2))
+        return
+
+    click.echo(
+        f"Analyzed {report.samples_total} A/B samples across "
+        f"{report.groups_analyzed} compressor/model combinations.\n"
+    )
+    if not report.recommendations:
+        click.echo("✓ No compression failures found — all combinations within threshold.")
+        return
+
+    click.echo(f"Found {len(report.recommendations)} issue(s):\n")
+    _sev_marker = {"high": "‼", "medium": "▲", "low": "·"}
+    for r in report.recommendations:
+        click.echo(f"{_sev_marker[r.severity]} [{r.severity.upper()}] {r.target}")
+        click.echo(f"    issue:  {r.issue} (n={r.samples})")
+        click.echo(f"    action: {r.action}\n")
 
 
 @main.group()

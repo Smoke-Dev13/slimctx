@@ -462,3 +462,29 @@ async def test_run_shadow_ab_partial_overlap_quality() -> None:
     report = monitor.quality_report()
     score = report["quality"]["mean"]
     assert 0.0 < score < 1.0
+
+
+# ── ABMonitor — A/B log persistence ───────────────────────────────────────────
+
+
+def test_record_sample_persists_to_log(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import json
+    from pathlib import Path
+
+    log = Path(tmp_path) / "nested" / "ab.jsonl"
+    monitor = ABMonitor(max_samples=10, log_path=str(log))
+    monitor.record_sample(_make_sample(0.42, "json_smart", numeric_consistency=0.6))
+
+    lines = log.read_text().strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["compressor"] == "json_smart"
+    assert rec["quality_score"] == pytest.approx(0.42, abs=1e-4)
+    assert rec["numeric_consistency"] == pytest.approx(0.6, abs=1e-4)
+
+
+def test_no_log_when_path_unset(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Default monitor has no log path → record_sample must not create files.
+    monitor = ABMonitor(max_samples=10)
+    monitor.record_sample(_make_sample(0.9))
+    assert list(__import__("pathlib").Path(tmp_path).iterdir()) == []

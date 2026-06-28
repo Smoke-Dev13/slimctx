@@ -27,6 +27,7 @@ import threading
 import time
 from collections import Counter, deque
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import mean
 from typing import Any
 
@@ -176,9 +177,11 @@ class ABMonitor:
             Older samples are evicted when the ring is full (FIFO).
     """
 
-    def __init__(self, max_samples: int = 1000) -> None:
+    def __init__(self, max_samples: int = 1000, *, log_path: str | None = None) -> None:
         self._samples: deque[ABSample] = deque(maxlen=max_samples)
         self._lock = threading.Lock()
+        # Optional persisted corpus mined by ``contextly learn``.
+        self._log_path = Path(log_path) if log_path else None
         # Running totals (not capped by max_samples)
         self._total_requests: int = 0
         self._total_compressed: int = 0
@@ -229,6 +232,7 @@ class ABMonitor:
         """
         with self._lock:
             self._samples.append(sample)
+        self._append_log(sample)
         observe_ab_sample(compressor=sample.compressor, quality_score=sample.quality_score)
         logger.info(
             "ab_sample_recorded",
@@ -236,6 +240,32 @@ class ABMonitor:
             quality=round(sample.quality_score, 3),
             chars_saved=sample.original_chars - sample.compressed_chars,
         )
+
+    def _append_log(self, sample: ABSample) -> None:
+        """Best-effort append of *sample* to the JSONL learning corpus.
+
+        Persistence failures never break the request path — the in-memory ring
+        buffer remains the source of truth for the live dashboard.
+        """
+        if self._log_path is None:
+            return
+        try:
+            record = {
+                "ts": round(sample.timestamp, 3),
+                "model": sample.model,
+                "compressor": sample.compressor,
+                "original_chars": sample.original_chars,
+                "compressed_chars": sample.compressed_chars,
+                "quality_score": round(sample.quality_score, 4),
+                "numeric_consistency": round(sample.numeric_consistency, 4),
+            }
+            line = json.dumps(record, separators=(",", ":")) + "\n"
+            with self._lock:
+                self._log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._log_path.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+        except OSError:
+            logger.warning("ab_log_append_failed", exc_info=True)
 
     # ── Reporting ─────────────────────────────────────────────────────────────
 
