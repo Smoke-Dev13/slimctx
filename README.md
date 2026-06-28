@@ -16,7 +16,9 @@ Your app -> Contextly (localhost:4000) -> OpenAI / Anthropic / any LLM
 
 - Compresses prompt messages on the fly — **JSON losslessly by default** (columnar rewrite, every record kept), prose by extractive summarization, code by comment/whitespace stripping
 - Stores originals in a reversible CCR store so compressed context can be retrieved verbatim
-- Shadows a configurable fraction of requests to the original (uncompressed) upstream and scores quality with ROUGE-1 F1 **and a numeric-consistency check**
+- Shadows a configurable fraction of requests to the original (uncompressed) upstream and scores quality with ROUGE-1 F1 **and a numeric-consistency check**; run `contextly learn` to mine the log for regressions
+- **Bidirectional security firewall** — inbound prompt-injection detection and secret redaction on every request; opt-in outbound scanning catches secrets/PII the model echoes back and flags system-prompt disclosure in responses
+- **Cross-agent shared memory** — agents share a persistent key-value store accessible over HTTP (`/v1/memory`) and MCP; entries are semantically deduplicated on write
 - Exposes Prometheus metrics at `/metrics` and a JSON stats endpoint at `/stats`
 - Optionally runs as an MCP server (Claude Desktop / any MCP client)
 
@@ -106,8 +108,12 @@ pip install "contextly[all]"
 
 ```
 contextly proxy      Start the proxy server
-contextly mcp        Run as an MCP server (stdio transport)
+contextly bench      Benchmark compression on a JSON payload file
 contextly stats      Print live stats from a running proxy
+contextly learn      Mine A/B quality log for compression regressions
+contextly mcp        Run as an MCP server (stdio transport)
+contextly mcp-gateway  Wrap another MCP server, compressing its tool outputs
+contextly audit replay  Replay a compression audit log
 ```
 
 ### `contextly proxy`
@@ -122,11 +128,32 @@ Options:
   --upstream-url TEXT          Override upstream base URL
   --upstream-api-key TEXT      API key (defaults to OPENAI_API_KEY / ANTHROPIC_API_KEY)
   --ab-sample-rate FLOAT       Fraction of requests for A/B quality monitoring (0-1)  [default: 0.0]
+  --ab-log-path TEXT           Persist A/B samples as JSONL for 'contextly learn'
   --workers INTEGER            Uvicorn worker count  [default: 1]
   --log-level TEXT             [default: info]
   --no-compress                Disable compression pipeline
   --safe-mode                  Never drop JSON records or prose sentences
+  --ccr-backend TEXT           Reversible store: memory or sqlite  [default: memory]
+  --ccr-path TEXT              SQLite path (when --ccr-backend sqlite)
 ```
+
+### `contextly learn`
+
+Mine the A/B quality log (produced when `--ab-log-path` is set) for compressor/model combinations whose quality regressed and emit ranked, actionable recommendations:
+
+```bash
+contextly learn .contextly/ab.jsonl
+contextly learn .contextly/ab.jsonl --min-quality 0.75 --json
+```
+
+```
+Options:
+  --min-quality FLOAT   Mean ROUGE-1 below which a combo is a failure  [default: 0.7]
+  --min-numeric FLOAT   Mean numeric-consistency below which factual loss is flagged  [default: 0.9]
+  --json                Emit the report as JSON
+```
+
+Groups with fewer than 5 samples are reported as `low` confidence so you don't act on noise. A group with good ROUGE-1 but low numeric consistency is still flagged as `medium` severity — a fluent answer with a wrong figure is the silent failure mode lossy compression is most likely to produce.
 
 ### Safe mode
 
@@ -153,6 +180,10 @@ All settings can be set via environment variables with the `CONTEXTLY_` prefix o
 | `CONTEXTLY_CCR_PATH` | `.contextly/ccr.db` | SQLite file path when `CCR_BACKEND=sqlite` |
 | `CONTEXTLY_TARGET_TOKEN_BUDGET` | -- | Optional token budget hint for budget-aware compressors |
 | `CONTEXTLY_AB_SAMPLE_RATE` | `0.0` | Fraction of requests to shadow for A/B quality measurement |
+| `CONTEXTLY_AB_LOG_PATH` | -- | Append A/B samples as JSONL here; `contextly learn` reads this file |
+| `CONTEXTLY_FIREWALL_ENABLED` | `false` | Enable inbound prompt-injection detection and secret/PII redaction |
+| `CONTEXTLY_FIREWALL_SCAN_RESPONSES` | `false` | Also scan upstream responses for echoed secrets and injection-leak markers (requires `FIREWALL_ENABLED`) |
+| `CONTEXTLY_INJECTION_BLOCK_THRESHOLD` | `0.0` | Auto-reject requests whose injection risk score exceeds this (0 = flag-only) |
 
 ---
 
@@ -316,6 +347,68 @@ A ROUGE-1 score of `1.0` means the compressed-context response is word-for-word 
 > **Caveat:** ROUGE-1 compares the compressed-context answer to the *full-context* answer, not to ground truth — it tells you how much the answer *changed*, not whether it was right to begin with. For high-stakes use, pair it with an LLM-judge or task-specific exact-match eval on a held-out set.
 
 View results at `GET /quality` or via the `contextly_ab_quality_score` histogram in Prometheus.
+
+---
+
+## Security Firewall
+
+Contextly ships a zero-dependency, regex-based security layer that operates on both sides of the proxy. It requires no external service and adds sub-millisecond overhead.
+
+### Inbound (request) scanning
+
+Enable with `CONTEXTLY_FIREWALL_ENABLED=true`:
+
+- **Prompt-injection detection** (`InjectionScanner`) — scans every incoming message for patterns characteristic of override attempts, jailbreak triggers, role escalation, data-exfiltration requests, and delimiter injection. Returns a risk score in `[0, 1]`; requests above `CONTEXTLY_INJECTION_BLOCK_THRESHOLD` are rejected with `400`.
+- **Secret/PII redaction** (`SecretRedactor`) — replaces API keys (OpenAI, Anthropic, AWS, GCP, Stripe, …), SSNs, credit-card numbers, and other PII in the prompt before it reaches the upstream model.
+
+### Outbound (response) scanning
+
+Enable additionally with `CONTEXTLY_FIREWALL_SCAN_RESPONSES=true`:
+
+- **Response secret detection** — runs the same secret catalogue on the model's reply. If the model echoed a key or SSN from context back to the caller, `X-Contextly-Response-Secrets-Redacted: <n>` is added to the response headers and the counter increments in `/stats`.
+- **Injection-leak detection** — scans the response for symptoms of a *successful* injection: system-prompt disclosure ("my instructions are …", "here is my system prompt"), verbatim chat-template delimiters (`<|im_start|>`, `[INST]`, `<<SYS>>`). Detected leaks set `X-Contextly-Response-Injection-Leak: <score>`.
+
+Both outbound detections are **flag-only** (non-destructive) — the response body is not rewritten, so structured JSON responses are never corrupted. Body-rewrite is a planned follow-up.
+
+### Security stats
+
+```bash
+curl http://localhost:4000/stats | jq .firewall
+```
+
+```json
+{
+  "secrets_redacted_total": 12,
+  "requests_with_secrets_total": 7,
+  "response_secrets_redacted_total": 2,
+  "responses_with_secrets_total": 1,
+  "injections_detected_total": 3,
+  "injections_blocked_total": 1
+}
+```
+
+---
+
+## Cross-Agent Shared Memory
+
+Contextly includes a persistent key-value memory store accessible over HTTP and MCP, designed for multi-agent pipelines where agents need to share state across calls.
+
+### HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/v1/memory/{key}` | Store a value (body: `{"value": "..."}`) |
+| `GET` | `/v1/memory/{key}` | Retrieve a stored value |
+| `DELETE` | `/v1/memory/{key}` | Delete a key |
+| `GET` | `/v1/memory` | List all keys |
+
+### MCP tools
+
+When running as an MCP server (`contextly mcp`), the same store is exposed as `memory_write`, `memory_read`, `memory_delete`, and `memory_list` tools.
+
+### Semantic deduplication
+
+On write, Contextly checks for near-duplicate entries using a fast content hash. Entries whose content is semantically equivalent (within the configured threshold) are silently merged rather than stored twice, keeping the memory store compact even in long-running agent loops.
 
 ---
 
