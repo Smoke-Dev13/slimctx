@@ -94,6 +94,8 @@ class SecretRedactor:
     def __init__(self) -> None:
         self._secrets_redacted = 0
         self._requests_with_secrets = 0
+        self._response_secrets_redacted = 0
+        self._responses_with_secrets = 0
         self._lock = threading.Lock()
 
     def _placeholder(self, secret: str, kind: str, ccr_store: Any | None) -> str:
@@ -167,9 +169,23 @@ class SecretRedactor:
 
         return out, total
 
+    def record_response_redaction(self, count: int) -> None:
+        """Account *count* secrets redacted from an upstream model response.
+
+        Kept separate from the inbound counters so the dashboard can show which
+        direction leaked — inbound (request) vs outbound (model response).
+        """
+        if count <= 0:
+            return
+        with self._lock:
+            self._response_secrets_redacted += count
+            self._responses_with_secrets += 1
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             return {
                 "secrets_redacted_total": self._secrets_redacted,
                 "requests_with_secrets_total": self._requests_with_secrets,
+                "response_secrets_redacted_total": self._response_secrets_redacted,
+                "responses_with_secrets_total": self._responses_with_secrets,
             }

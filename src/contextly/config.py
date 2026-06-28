@@ -169,6 +169,10 @@ class Config(BaseSettings):
     firewall_enabled: bool = False
     firewall_block_on_secret: bool = False
     firewall_reversible: bool = False
+    # Bidirectional: also scan the upstream model response for leaked secrets /
+    # disclosed system prompts (data exfiltration / successful-injection signals).
+    # Non-streaming only; flags + counts (does not rewrite the response body).
+    firewall_scan_responses: bool = False
 
     # ── Multi-model failover ─────────────────────────────────────────────────
     # Ordered list of fallback upstreams. Each entry: {"url": "...", "api_key": "...",

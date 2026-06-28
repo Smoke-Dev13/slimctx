@@ -146,4 +146,28 @@ def test_stats_counters() -> None:
 
 
 def test_stats_initial() -> None:
-    assert _r().stats() == {"secrets_redacted_total": 0, "requests_with_secrets_total": 0}
+    assert _r().stats() == {
+        "secrets_redacted_total": 0,
+        "requests_with_secrets_total": 0,
+        "response_secrets_redacted_total": 0,
+        "responses_with_secrets_total": 0,
+    }
+
+
+def test_response_redaction_counters() -> None:
+    r = _r()
+    # The model echoed a secret back in its reply — caught on the outbound side.
+    leaked = r.redact("here is the key: sk-abcdefghij1234567890ABCD")
+    assert leaked.count == 1
+    r.record_response_redaction(leaked.count)
+    st = r.stats()
+    assert st["response_secrets_redacted_total"] == 1
+    assert st["responses_with_secrets_total"] == 1
+    # Inbound counters untouched.
+    assert st["secrets_redacted_total"] == 0
+
+
+def test_record_response_redaction_ignores_zero() -> None:
+    r = _r()
+    r.record_response_redaction(0)
+    assert r.stats()["responses_with_secrets_total"] == 0

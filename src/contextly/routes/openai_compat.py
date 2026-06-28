@@ -701,6 +701,22 @@ async def chat_completions(
         _background_tasks.add(shadow_task)
         shadow_task.add_done_callback(_background_tasks.discard)
 
+    # Bidirectional firewall: scan the model's reply for leaked secrets and
+    # system-prompt disclosure (successful-injection / exfiltration signals).
+    # Non-streaming only; flags via headers + counters, body is left intact.
+    if config.firewall_scan_responses and upstream_resp.status_code == 200:
+        response_text = _extract_response_text(upstream_resp.content)
+        if response_text:
+            redaction = secret_redactor.redact(response_text)
+            if redaction.count:
+                secret_redactor.record_response_redaction(redaction.count)
+                extra_headers["X-Contextly-Response-Secrets-Redacted"] = str(redaction.count)
+            leak = injection_scanner.scan_response(response_text)
+            if leak.detected:
+                extra_headers["X-Contextly-Response-Injection-Leak"] = str(
+                    round(leak.risk_score, 3)
+                )
+
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
