@@ -154,8 +154,7 @@ def analyze(
 
         if not confident:
             action = (
-                f"only {n} sample(s) — raise ab_sample_rate to gather more evidence "
-                f"before acting"
+                f"only {n} sample(s) — raise ab_sample_rate to gather more evidence before acting"
             )
         elif low_numeric and not low_quality:
             action = (

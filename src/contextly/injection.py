@@ -66,8 +66,7 @@ _RAW_RESPONSE_LEAK_PATTERNS: list[tuple[str, float]] = [
 ]
 
 _COMPILED_RESPONSE_LEAK: list[tuple[re.Pattern[str], float]] = [
-    (re.compile(pattern, re.IGNORECASE), weight)
-    for pattern, weight in _RAW_RESPONSE_LEAK_PATTERNS
+    (re.compile(pattern, re.IGNORECASE), weight) for pattern, weight in _RAW_RESPONSE_LEAK_PATTERNS
 ]
 
 
