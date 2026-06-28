@@ -169,8 +169,14 @@ def test_learn_reports_failures(runner: CliRunner, tmp_path: object) -> None:
 
     log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
     rows = [
-        {"model": "gpt-4o", "compressor": "json_smart", "quality_score": 0.3,
-         "numeric_consistency": 1.0, "original_chars": 1000, "compressed_chars": 300}
+        {
+            "model": "gpt-4o",
+            "compressor": "json_smart",
+            "quality_score": 0.3,
+            "numeric_consistency": 1.0,
+            "original_chars": 1000,
+            "compressed_chars": 300,
+        }
         for _ in range(8)
     ]
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -186,10 +192,19 @@ def test_learn_clean_log_no_issues(runner: CliRunner, tmp_path: object) -> None:
     import pathlib
 
     log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
-    log.write_text(json.dumps(
-        {"model": "gpt-4o", "compressor": "prose", "quality_score": 0.95,
-         "numeric_consistency": 1.0, "original_chars": 100, "compressed_chars": 50}
-    ) + "\n")
+    log.write_text(
+        json.dumps(
+            {
+                "model": "gpt-4o",
+                "compressor": "prose",
+                "quality_score": 0.95,
+                "numeric_consistency": 1.0,
+                "original_chars": 100,
+                "compressed_chars": 50,
+            }
+        )
+        + "\n"
+    )
 
     result = runner.invoke(main, ["learn", str(log)])
     assert result.exit_code == 0
@@ -201,10 +216,19 @@ def test_learn_json_output(runner: CliRunner, tmp_path: object) -> None:
     import pathlib
 
     log = pathlib.Path(str(tmp_path)) / "ab.jsonl"
-    log.write_text(json.dumps(
-        {"model": "gpt-4o", "compressor": "prose", "quality_score": 0.95,
-         "numeric_consistency": 1.0, "original_chars": 100, "compressed_chars": 50}
-    ) + "\n")
+    log.write_text(
+        json.dumps(
+            {
+                "model": "gpt-4o",
+                "compressor": "prose",
+                "quality_score": 0.95,
+                "numeric_consistency": 1.0,
+                "original_chars": 100,
+                "compressed_chars": 50,
+            }
+        )
+        + "\n"
+    )
 
     result = runner.invoke(main, ["learn", str(log), "--json"])
     assert result.exit_code == 0
