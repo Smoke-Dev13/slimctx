@@ -288,12 +288,21 @@ def mcp_server() -> None:
     help="Shared savings DB path (default: ~/.contextly/gateway_stats.db). "
     "Keep identical across wrapped servers to aggregate them in one dashboard.",
 )
+@click.option(
+    "--gateway-model",
+    default="",
+    envvar="CONTEXTLY_GATEWAY_MODEL",
+    help="Model name for cost estimation (e.g. claude-sonnet-4-6). "
+    "Converts token savings to dollars in the dashboard. "
+    "Falls back to $0.002/1K tokens when omitted.",
+)
 @click.argument("downstream", nargs=-1, type=click.UNPROCESSED)
 def mcp_gateway(
     dashboard_port: int,
     dashboard_host: str,
     server_name: str,
     stats_path: str,
+    gateway_model: str,
     downstream: tuple[str, ...],
 ) -> None:
     """Proxy a downstream MCP server, compressing its tool outputs on the way back.
@@ -349,6 +358,7 @@ def mcp_gateway(
             dashboard_port=dashboard_port or None,
             server_name=server_name,
             stats_path=stats_path or None,
+            model=gateway_model,
         )
     )
 

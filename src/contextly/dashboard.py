@@ -393,11 +393,12 @@ async function tick() {
     prevTokens = tokens;
 
     // Use server-side dollar savings if available, otherwise fall back to manual price.
-    const serverDollars = s.dollars_saved_total;
-    const costVal = (serverDollars != null && serverDollars > 0)
+    // Also add gateway cost savings if the gateway recorded them (--gateway-model set).
+    const serverDollars = (s.dollars_saved_total || 0) + (g.dollars_saved_total || 0);
+    const costVal = (serverDollars > 0)
       ? serverDollars.toFixed(4) : (tokens / 1e6 * price).toFixed(4);
     $('cost').textContent = '$' + costVal;
-    $('cost-sub').textContent = (serverDollars != null && serverDollars > 0)
+    $('cost-sub').textContent = (serverDollars > 0)
       ? 'server-side pricing' : (price ? 'at $' + price + '/1M tokens' : '');
     $('cost-sub').style.color = (serverDollars != null && serverDollars > 0)
       ? 'var(--green)' : 'var(--muted)';

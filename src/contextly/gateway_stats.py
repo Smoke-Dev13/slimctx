@@ -31,6 +31,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
+from contextly.pricing import tokens_to_dollars
+
 logger = structlog.get_logger(__name__)
 
 # Same chars→tokens heuristic the rest of the codebase uses (≈4 chars/token).
@@ -41,7 +43,7 @@ _CHARS_PER_TOKEN = 4
 class StatsRecorder(Protocol):
     """The minimal surface the gateway and dashboard need from a stats backend."""
 
-    def record(self, tool: str, chars_before: int, chars_after: int) -> None: ...
+    def record(self, tool: str, chars_before: int, chars_after: int, model: str = "") -> None: ...
 
     def snapshot(self) -> dict[str, Any]: ...
 
@@ -58,6 +60,7 @@ class _ToolTotals:
     calls: int = 0
     chars_before: int = 0
     chars_after: int = 0
+    dollars_saved: float = 0.0
 
 
 @dataclass
@@ -74,20 +77,25 @@ class GatewayStats:
     _compressed_calls: int = 0
     _chars_before: int = 0
     _chars_after: int = 0
+    _dollars_saved: float = 0.0
     _by_tool: dict[str, _ToolTotals] = field(default_factory=dict)
 
-    def record(self, tool: str, chars_before: int, chars_after: int) -> None:
+    def record(self, tool: str, chars_before: int, chars_after: int, model: str = "") -> None:
         """Record one tool result's before/after character counts."""
+        chars_saved = max(0, chars_before - chars_after)
+        dollars = tokens_to_dollars(chars_saved // _CHARS_PER_TOKEN, model)
         with self._lock:
             self._calls += 1
             if chars_after < chars_before:
                 self._compressed_calls += 1
             self._chars_before += chars_before
             self._chars_after += chars_after
+            self._dollars_saved += dollars
             t = self._by_tool.setdefault(tool, _ToolTotals())
             t.calls += 1
             t.chars_before += chars_before
             t.chars_after += chars_after
+            t.dollars_saved += dollars
 
     def snapshot(self) -> dict[str, Any]:
         """Return a JSON-serialisable view of the accumulated savings."""
@@ -107,6 +115,7 @@ class GatewayStats:
                         if t.chars_before > 0
                         else 0.0
                     ),
+                    "dollars_saved": round(t.dollars_saved, 6),
                 }
                 for name, t in sorted(self._by_tool.items())
             }
@@ -118,6 +127,7 @@ class GatewayStats:
                 "chars_after_total": self._chars_after,
                 "chars_saved_total": chars_saved,
                 "tokens_saved_estimate_total": chars_saved // _CHARS_PER_TOKEN,
+                "dollars_saved_total": round(self._dollars_saved, 6),
                 "compression_ratio_mean": ratio,
                 "by_tool": by_tool,
             }
@@ -156,25 +166,37 @@ class SQLiteStatsStore:
             "CREATE TABLE IF NOT EXISTS tool_stats ("
             "server TEXT NOT NULL, tool TEXT NOT NULL, calls INTEGER NOT NULL, "
             "compressed_calls INTEGER NOT NULL, chars_before INTEGER NOT NULL, "
-            "chars_after INTEGER NOT NULL, PRIMARY KEY (server, tool))"
+            "chars_after INTEGER NOT NULL, dollars_saved REAL NOT NULL DEFAULT 0.0, "
+            "PRIMARY KEY (server, tool))"
         )
+        # Add dollars_saved column to existing databases that predate this field.
+        try:
+            self._conn.execute(
+                "ALTER TABLE tool_stats ADD COLUMN dollars_saved REAL NOT NULL DEFAULT 0.0"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         self._conn.commit()
 
-    def record(self, tool: str, chars_before: int, chars_after: int) -> None:
+    def record(self, tool: str, chars_before: int, chars_after: int, model: str = "") -> None:
         """Add one tool result to the running totals for (this server, *tool*)."""
         compressed = 1 if chars_after < chars_before else 0
+        chars_saved = max(0, chars_before - chars_after)
+        dollars = tokens_to_dollars(chars_saved // _CHARS_PER_TOKEN, model)
         try:
             with self._lock:
                 self._conn.execute(
                     "INSERT INTO tool_stats"
-                    "(server, tool, calls, compressed_calls, chars_before, chars_after) "
-                    "VALUES (?, ?, 1, ?, ?, ?) "
+                    "(server, tool, calls, compressed_calls,"
+                    " chars_before, chars_after, dollars_saved) "
+                    "VALUES (?, ?, 1, ?, ?, ?, ?) "
                     "ON CONFLICT(server, tool) DO UPDATE SET "
                     "calls = calls + 1, "
                     "compressed_calls = compressed_calls + excluded.compressed_calls, "
                     "chars_before = chars_before + excluded.chars_before, "
-                    "chars_after = chars_after + excluded.chars_after",
-                    (self._server, tool, compressed, chars_before, chars_after),
+                    "chars_after = chars_after + excluded.chars_after, "
+                    "dollars_saved = dollars_saved + excluded.dollars_saved",
+                    (self._server, tool, compressed, chars_before, chars_after, dollars),
                 )
                 self._conn.commit()
         except sqlite3.Error:
@@ -185,19 +207,21 @@ class SQLiteStatsStore:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    "SELECT server, tool, calls, compressed_calls, chars_before, chars_after "
-                    "FROM tool_stats ORDER BY server, tool"
+                    "SELECT server, tool, calls, compressed_calls, chars_before, chars_after, "
+                    "dollars_saved FROM tool_stats ORDER BY server, tool"
                 ).fetchall()
             except sqlite3.Error:
                 rows = []
 
         calls = compressed = before = after = 0
+        dollars_total = 0.0
         by_tool: dict[str, Any] = {}
-        for server, tool, c, cc, b, a in rows:
+        for server, tool, c, cc, b, a, d in rows:
             calls += c
             compressed += cc
             before += b
             after += a
+            dollars_total += d
             by_tool[_label(server, tool)] = {
                 "server": server,
                 "calls": c,
@@ -205,6 +229,7 @@ class SQLiteStatsStore:
                 "chars_after": a,
                 "chars_saved": b - a,
                 "saved_pct": round(100 * (1 - a / b), 1) if b > 0 else 0.0,
+                "dollars_saved": round(d, 6),
             }
 
         chars_saved = before - after
@@ -217,6 +242,7 @@ class SQLiteStatsStore:
             "chars_after_total": after,
             "chars_saved_total": chars_saved,
             "tokens_saved_estimate_total": chars_saved // _CHARS_PER_TOKEN,
+            "dollars_saved_total": round(dollars_total, 6),
             "compression_ratio_mean": ratio,
             "by_tool": by_tool,
         }

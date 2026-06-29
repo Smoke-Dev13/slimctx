@@ -6,6 +6,25 @@ All notable changes to Contextly are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Bidirectional security firewall.** The existing inbound firewall (prompt-injection
+  detection + secret/PII redaction on requests) now also covers the upstream response.
+  Enable with `CONTEXTLY_FIREWALL_SCAN_RESPONSES=true`: the proxy runs the secret
+  catalogue and an injection-leak detector on the model's reply, sets
+  `X-Contextly-Response-Secrets-Redacted` / `X-Contextly-Response-Injection-Leak`
+  headers, and exposes per-direction counters in `/stats`. Flag-only (non-destructive)
+  for v1; body-rewrite planned as a follow-up.
+- **`contextly learn` — failure-learning CLI command.** Run `contextly learn
+  <ab_log.jsonl>` to mine the A/B quality corpus (produced by `--ab-log-path`) for
+  compressor/model combinations whose ROUGE-1 quality or numeric consistency fell
+  below threshold. Emits ranked, actionable recommendations (severity high/medium/low,
+  concrete `safe_mode` or sampling guidance). `--json` for machine-readable output.
+- **A/B log persistence.** `contextly proxy --ab-log-path .contextly/ab.jsonl` now
+  appends each A/B sample as a JSONL record so `contextly learn` can mine it.
+  Previously samples existed only in the in-memory ring buffer.
+- **Cross-agent shared memory store.** HTTP endpoints (`PUT/GET/DELETE /v1/memory/{key}`,
+  `GET /v1/memory`) and MCP tools (`memory_write`, `memory_read`, `memory_delete`,
+  `memory_list`) for agents to share persistent state. Writes are semantically
+  deduplicated to keep the store compact in long-running loops.
 - **One dashboard for the proxy and every wrapped MCP server.** Each
   `mcp-gateway` instance records its savings into a shared SQLite file
   (`~/.contextly/gateway_stats.db`, override `--stats-path`) tagged by a
@@ -21,17 +40,11 @@ All notable changes to Contextly are documented here. This project adheres to
   port, so multiple wrapped servers can't knock each other off the dashboard.
 
 ### Fixed
-- A compressor fault on a tool output no longer breaks the call: the gateway
-  falls back to the raw text and logs `gateway_compress_failed`, instead of the
-  MCP client reporting "Failed to call tool".
 - **Shared multi-server stats.** Gateways now record savings into a shared
   SQLite file (`~/.contextly/gateway_stats.db`, override `--stats-path`) tagged
   by a per-server label (derived from the downstream URL, override `--name`).
-  When several servers are wrapped at once — each its own gateway process
-  contending for the same dashboard port — the one dashboard that binds the port
-  reports the **combined** savings of all of them instead of just its own.
-
-### Fixed
+  When several servers are wrapped at once, the single dashboard that binds the
+  port shows the **combined** savings of all of them.
 - Gateway compression is now strictly best-effort: a compressor fault on a tool
   output falls back to the raw text and logs `gateway_compress_failed`, instead
   of propagating out and making the MCP client report "Failed to call tool".
