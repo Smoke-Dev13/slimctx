@@ -374,10 +374,16 @@ async function tick() {
       fetch('/gateway-stats').then(r => r.json()).catch(() => ({})),
     ]);
 
-    const tokens = s.tokens_saved_estimate_total || 0;
+    // Hero cards aggregate both paths: the proxy (/stats) and the MCP gateway
+    // (/gateway-stats). A gateway-only user has no proxy traffic, so these must
+    // include gateway tool calls or the cards read zero despite real savings.
     const price  = parseFloat($('price').value) || 0;
-    const total  = s.requests_total || 0, comp = s.requests_compressed || 0;
-    const saved  = Math.max(0, 1 - (s.compression_ratio_mean ?? 1));
+    const tokens = (s.tokens_saved_estimate_total || 0) + (g.tokens_saved_estimate_total || 0);
+    const total  = (s.requests_total || 0) + (g.tool_calls_total || 0);
+    const comp   = (s.requests_compressed || 0) + (g.tool_calls_compressed || 0);
+    const before = (s.chars_before_total || 0) + (g.chars_before_total || 0);
+    const after  = (s.chars_after_total || 0) + (g.chars_after_total || 0);
+    const saved  = before > 0 ? Math.max(0, 1 - after / before) : 0;
 
     pushHistory('tokens', tokens);
     renderSparkline('sl-tokens', history.tokens);
