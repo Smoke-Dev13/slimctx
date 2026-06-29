@@ -154,19 +154,19 @@ td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
     <span class="brand-name">Context<em>ly</em></span>
   </div>
   <nav class="nav">
-    <div class="nav-item active">
+    <div class="nav-item active" data-page="overview">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Overview
     </div>
-    <div class="nav-item">
+    <div class="nav-item" data-page="proxy">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       Proxy
     </div>
-    <div class="nav-item">
+    <div class="nav-item" data-page="gateway">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></svg>
       MCP Gateway
     </div>
-    <div class="nav-item">
+    <div class="nav-item" data-page="quality">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
       Quality
     </div>
@@ -194,7 +194,7 @@ td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
 
   <div class="content">
 
-    <div class="hero">
+    <div class="hero" data-pages="overview proxy quality gateway">
       <div class="hero-card green">
         <div class="hero-glow"></div>
         <div class="hero-icon">
@@ -252,6 +252,7 @@ td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
       </div>
     </div>
 
+    <section class="page-block" data-pages="overview proxy quality">
     <div class="section-head"><h2>Quality metrics</h2></div>
     <div class="q-grid">
       <div class="q-card">
@@ -283,7 +284,9 @@ td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
         </tbody>
       </table>
     </div>
+    </section>
 
+    <section class="page-block" data-pages="overview gateway">
     <div class="section-head"><h2>MCP gateway · per-tool savings</h2></div>
     <div class="tbl-wrap">
       <table>
@@ -300,6 +303,7 @@ td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
         </tbody>
       </table>
     </div>
+    </section>
 
   </div>
 </div>
@@ -309,6 +313,21 @@ const $ = id => document.getElementById(id);
 const fmt = n => (+n || 0).toLocaleString();
 const pct = x => (x * 100).toFixed(1) + '%';
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+// Sidebar navigation: filter which content blocks are shown per page.
+// tick() keeps updating every element regardless of visibility, so switching
+// pages never loses data — hidden blocks are just display:none.
+function showPage(page) {
+  document.querySelectorAll('.nav-item').forEach(n =>
+    n.classList.toggle('active', n.dataset.page === page));
+  document.querySelectorAll('[data-pages]').forEach(sec => {
+    sec.style.display = sec.dataset.pages.split(' ').includes(page) ? '' : 'none';
+  });
+  const active = document.querySelector('.nav-item.active');
+  if (active) document.querySelector('.page-title').textContent = active.textContent.trim();
+}
+document.querySelectorAll('.nav-item').forEach(n =>
+  n.addEventListener('click', () => showPage(n.dataset.page)));
 
 const COLORS = ['#3fb950','#58a6ff','#e3b341','#7a8799','#f85149','#a371f7'];
 const history = { tokens: [] };
