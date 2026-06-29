@@ -290,6 +290,8 @@ class ABMonitor:
         return {
             "requests_total": total,
             "requests_compressed": compressed,
+            "chars_before_total": orig_chars,
+            "chars_after_total": comp_chars,
             "chars_saved_total": chars_saved,
             "tokens_saved_estimate_total": tokens_saved,
             "dollars_saved_total": round(dollars_saved, 6),
