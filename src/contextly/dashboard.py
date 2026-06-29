@@ -231,6 +231,11 @@ DASHBOARD_HTML = """<!doctype html>
           <polyline id="sl-gtokens" stroke="#3fb950" points=""/>
         </svg>
       </div>
+      <div class="card card-accent" data-tip="Dollar savings on MCP tool outputs (requires --gateway-model)">
+        <div class="label">Gateway cost saved</div>
+        <div class="value green" id="g_cost">—</div>
+        <div class="card-sub" id="g_cost_sub"></div>
+      </div>
       <div class="card">
         <div class="label">Gateway tool calls</div>
         <div class="value" id="g_calls">—</div>
@@ -313,6 +318,7 @@ function renderGateway(g) {
   const gsaved = Math.max(0, 1 - (g.compression_ratio_mean ?? 1));
   const gtok = g.tokens_saved_estimate_total || 0;
   const gcalls = g.tool_calls_total || 0, gcomp = g.tool_calls_compressed || 0;
+  const gdollars = g.dollars_saved_total || 0;
   pushHistory('gtokens', gtok);
   renderSparkline('sl-gtokens', history.gtokens);
   animateTo('g_tokens', gtok, fmt);
@@ -321,6 +327,8 @@ function renderGateway(g) {
   $('g_ratio').innerHTML = pct(gsaved) + '<span class="unit">smaller</span>';
   $('gratio-bar').style.width = pct(clamp(gsaved, 0, 1));
   $('gcall-bar').style.width = gcalls ? pct(clamp(gcomp / gcalls, 0, 1)) : '0%';
+  $('g_cost').textContent = '$' + gdollars.toFixed(4);
+  $('g_cost_sub').textContent = gdollars > 0 ? 'model pricing' : 'set --gateway-model';
   const rows = Object.entries(g.by_tool || {});
   if (!rows.length) return;
   $('bytool-body').innerHTML = rows
@@ -364,11 +372,12 @@ async function tick() {
     prevTokens = tokens;
     // Use server-side dollar savings if available (has real model pricing),
     // otherwise fall back to the manual price input for a rough estimate.
-    const serverDollars = s.dollars_saved_total;
-    const costVal = (serverDollars != null && serverDollars > 0)
+    // Also add gateway cost savings if the gateway recorded them (--gateway-model set).
+    const serverDollars = (s.dollars_saved_total || 0) + (g.dollars_saved_total || 0);
+    const costVal = (serverDollars > 0)
       ? serverDollars.toFixed(4) : (tokens / 1e6 * price).toFixed(4);
     $('cost').textContent = '$' + costVal;
-    $('cost-sub').textContent = (serverDollars != null && serverDollars > 0)
+    $('cost-sub').textContent = (serverDollars > 0)
       ? 'server-side pricing' : (price ? 'at $' + price + '/1M tokens' : '');
     animateTo('requests', total, fmt);
     $('compressed').textContent = comp ? fmt(comp) + ' compressed' : '';

@@ -221,6 +221,7 @@ def build_gateway_server(
     forward_prompts: bool = False,
     stats: StatsRecorder | None = None,
     tool_registry: ToolCompressorRegistry | None = None,
+    model: str = "",
 ) -> Server:
     """Build the proxy MCP server that wraps *session* (the downstream server).
 
@@ -230,6 +231,7 @@ def build_gateway_server(
     given, each tool call's before/after size is recorded for the live dashboard.
     """
     server: Server = Server("contextly-gateway")
+    _model = model  # captured by _call_tool closure for cost estimation
     expand_tool = types.Tool(
         name=_EXPAND_TOOL_NAME,
         description=_EXPAND_TOOL_DESCRIPTION,
@@ -312,7 +314,7 @@ def build_gateway_server(
         after = sum(len(b.text) for b in new_content if isinstance(b, types.TextContent))
         saved_pct = round(100 * (1 - after / before)) if before else 0
         if stats is not None:
-            stats.record(name, before, after)
+            stats.record(name, before, after, model=_model)
         logger.info(
             "gateway_tool_result",
             tool=name,
@@ -393,6 +395,7 @@ async def run_gateway(
     stats_path: str | None = None,
     stats: StatsRecorder | None = None,
     tool_compressor_overrides: dict[str, str] | None = None,
+    model: str = "",
 ) -> None:
     """Launch the downstream MCP server and serve the gateway over stdio.
 
@@ -445,6 +448,7 @@ async def run_gateway(
                 forward_prompts=caps.prompts is not None,
                 stats=stats,
                 tool_registry=tool_registry,
+                model=model,
             )
             async with stdio_server() as (read, write):
                 await server.run(read, write, server.create_initialization_options())
