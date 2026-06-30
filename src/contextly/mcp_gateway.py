@@ -135,6 +135,12 @@ class ToolCompressorRegistry:
         best_ratio = 1.0
         for comp in self._compressors.values():
             try:
+                # Skip compressors that signal they're not appropriate for this
+                # content — prevents the log compressor from winning on JSON by
+                # collapsing homogeneous records into a single folded line.
+                if not comp.should_apply(text):
+                    sums[comp.name] = sums.get(comp.name, 0.0) + 1.0
+                    continue
                 result = comp.compress(text)
                 ratio = result.compression_ratio
             except Exception:
